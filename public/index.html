@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VIBE Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#14171c; --surface:#1b1f27; --surface-2:#20252f; --border:#2b3240;
+    --text:#eceff3; --text-dim:#8f97a8; --text-faint:#5c6577;
+    --signal:#3fd9c2; --signal-dim:#2a9686; --amber:#f5a940; --red:#f0555a; --green:#3ecf8e; --grey:#6b7280;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  header{margin-bottom:6px;}
+  .brand{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:34px;letter-spacing:0.5px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
+  .brand span.tag{font-family:'IBM Plex Mono',monospace;font-weight:400;font-size:12px;color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase;}
+  .sub{color:var(--text-dim);font-size:14px;margin-top:4px;}
+  .pulse-box{margin:18px 0 22px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px 10px;}
+  svg#pulseline{width:100%;height:46px;display:block;}
+  .pulse-meta{display:flex;justify-content:space-between;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--text-dim);margin-top:2px;flex-wrap:wrap;gap:6px;}
+  .pulse-meta .flags{color:var(--amber);font-weight:500;}
+  .pulse-meta .flags.hot{color:var(--red);}
+  .whoami{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);margin-bottom:18px;}
+  .whoami select{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:5px 8px;border-radius:6px;}
+  .focus-pin{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--signal-dim);border-radius:8px;padding:9px 14px;margin:16px 0;font-size:13px;flex-wrap:wrap;}
+  .focus-label{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--signal);text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap;}
+  #focus-text{flex:1;color:var(--text);}
+  .mytasks-panel{background:rgba(63,217,194,0.05);border:1px solid rgba(63,217,194,0.35);border-radius:10px;padding:16px 18px;margin-bottom:22px;}
+  .mytasks-panel ol{margin:8px 0 0;padding-left:20px;}
+  .mytasks-panel li{font-size:13.5px;line-height:1.7;color:#dcf5ef;margin-bottom:5px;}
+  .mytasks-panel .proj-tag{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:11px;margin-right:6px;}
+  .mytasks-panel .mt-status{font-family:'IBM Plex Mono',monospace;font-size:10px;margin-left:6px;padding:1px 6px;border-radius:10px;}
+  .mytasks-panel .empty{color:var(--text-faint);font-size:13px;font-style:italic;}
+  .status-not-started{background:rgba(107,114,128,0.18);color:var(--grey);}
+  .status-in-progress{background:rgba(63,217,194,0.14);color:var(--signal);}
+  .status-done{background:rgba(62,207,142,0.15);color:var(--green);}
+  .ferdi-panel{background:rgba(245,169,64,0.05);border:1px solid rgba(245,169,64,0.35);border-radius:10px;padding:16px 18px;margin-bottom:26px;}
+  .ferdi-panel ul{margin:8px 0 0;padding-left:18px;}
+  .ferdi-panel li{font-size:13.5px;line-height:1.6;color:#f0dcb8;margin-bottom:4px;}
+  .ferdi-panel .proj-tag{color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:11px;margin-right:6px;}
+  .ferdi-panel .empty{color:var(--text-faint);font-size:13px;font-style:italic;}
+  .days-left{font-family:'IBM Plex Mono',monospace;font-size:11px;padding:2px 7px;border-radius:5px;margin-left:6px;}
+  .days-left.ok{background:rgba(62,207,142,0.12);color:var(--green);}
+  .days-left.soon{background:rgba(245,169,64,0.15);color:var(--amber);}
+  .days-left.overdue{background:rgba(240,85,90,0.18);color:var(--red);}
+  .leader{background:linear-gradient(180deg, rgba(63,217,194,0.06), rgba(63,217,194,0.02));border:1px solid var(--signal-dim);border-radius:10px;padding:16px 18px;margin-bottom:26px;}
+  .leader-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
+  .leader-title{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;letter-spacing:0.5px;text-transform:uppercase;color:var(--signal);display:flex;align-items:center;gap:8px;}
+  .lock-btn{background:none;border:1px solid var(--border);color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:4px 9px;border-radius:6px;cursor:pointer;}
+  .lock-btn:hover{border-color:var(--signal-dim);color:var(--signal);}
+  .leader ul{margin:0;padding-left:18px;}
+  .leader li{font-size:13.5px;line-height:1.6;color:#dfe4ea;margin-bottom:4px;}
+  .leader textarea{width:100%;min-height:120px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;border-radius:6px;padding:10px;line-height:1.6;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:14px;overflow:hidden;}
+  .card-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;cursor:pointer;flex-wrap:wrap;gap:8px;}
+  .card-head:hover{background:var(--surface-2);}
+  .card-title-row{display:flex;align-items:center;gap:12px;}
+  .card-num{font-family:'IBM Plex Mono',monospace;color:var(--text-faint);font-size:15px;}
+  .card-title{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:17px;}
+  .status-pill{font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:500;padding:3px 9px;border-radius:20px;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;}
+  .status-on-track{background:rgba(62,207,142,0.15);color:var(--green);}
+  .status-at-risk{background:rgba(245,169,64,0.15);color:var(--amber);}
+  .status-blocked{background:rgba(240,85,90,0.15);color:var(--red);}
+  .status-paused{background:rgba(107,114,128,0.18);color:var(--grey);}
+  .caret{color:var(--text-faint);font-size:13px;transition:transform 0.15s;}
+  .card.open .caret{transform:rotate(90deg);}
+  .card-meta-row{display:flex;gap:16px;padding:0 18px 14px;font-size:12px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;flex-wrap:wrap;}
+  .owners-chip{background:var(--surface-2);border:1px solid var(--border);padding:2px 6px 2px 8px;border-radius:5px;color:var(--text-dim);display:inline-flex;align-items:center;gap:5px;}
+  .owners-chip button{background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:12px;padding:0;line-height:1;}
+  .owners-chip button:hover{color:var(--red);}
+  .owners-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .owner-add{display:inline-flex;align-items:center;gap:4px;}
+  .owner-add input{width:88px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 6px;border-radius:5px;}
+  .owner-add button{background:none;border:1px dashed var(--border);color:var(--text-dim);font-size:11px;padding:2px 7px;border-radius:5px;cursor:pointer;}
+  .owner-add button:hover{border-color:var(--signal-dim);color:var(--signal);}
+  input.task-owner-input{width:100%;background:transparent;border:none;border-bottom:1px dashed var(--border);color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:3px 2px;}
+  input.task-owner-input:focus{outline:none;border-bottom-color:var(--signal);}
+  select.owner-select, select.task-owner-select{width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:4px 6px;border-radius:5px;min-width:150px;}
+  select.task-owner-select{min-height:58px;}
+  .card-body{display:none;padding:0 18px 18px;}
+  .card.open .card-body{display:block;}
+  .section-label{font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.6px;color:var(--signal);margin:14px 0 6px;}
+  .section-label:first-child{margin-top:0;}
+  .section-text{font-size:13.5px;line-height:1.6;color:#dfe4ea;margin:0 0 4px;}
+  .wwa-edit{width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'Inter',sans-serif;font-size:13.5px;line-height:1.6;border-radius:6px;padding:10px;margin:0 0 4px;}
+  .outstanding-box{margin:2px 0 4px;padding:10px 12px;background:rgba(240,85,90,0.08);border-left:3px solid var(--red);border-radius:4px;}
+  .outstanding-box ul{margin:0;padding-left:16px;}
+  .outstanding-box li{font-size:13px;color:#f2c1c2;line-height:1.55;margin-bottom:3px;}
+  table.tasks{width:100%;border-collapse:collapse;font-size:13px;margin-top:2px;}
+  table.tasks th{text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-faint);padding:6px 8px;border-bottom:1px solid var(--border);}
+  table.tasks td{padding:7px 8px;border-bottom:1px solid rgba(43,50,64,0.6);vertical-align:top;}
+  table.tasks tr:last-child td{border-bottom:none;}
+  .task-name{color:var(--text);}
+  .task-owner{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
+  select.task-status{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:3px 6px;border-radius:5px;}
+  input.task-note{width:100%;background:transparent;border:none;border-bottom:1px dashed var(--border);color:var(--text-dim);font-size:12.5px;font-family:'Inter',sans-serif;padding:3px 2px;}
+  input.task-note:focus{outline:none;border-bottom-color:var(--signal);color:var(--text);}
+  .add-task-row{margin-top:10px;display:flex;gap:8px;}
+  .add-task-row input{flex:1;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:12.5px;padding:6px 9px;border-radius:6px;}
+  .add-task-row button{background:var(--signal-dim);border:none;color:#0a1613;font-weight:600;font-size:12px;padding:6px 14px;border-radius:6px;cursor:pointer;}
+  .add-task-row button:hover{background:var(--signal);}
+  .save-note{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--text-faint);margin-top:12px;text-align:right;min-height:14px;}
+  .save-note.visible{color:var(--signal);}
+  .save-note.error{color:var(--red);}
+  .nudge-btn{background:none;border:1px solid var(--border);color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:3px 7px;border-radius:5px;cursor:pointer;margin-left:6px;}
+  .nudge-btn:hover{border-color:var(--signal-dim);color:var(--signal);}
+  .admin-panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin:0 0 22px;overflow:hidden;}
+  .admin-panel summary{cursor:pointer;padding:14px 18px;list-style:none;}
+  .admin-panel summary::-webkit-details-marker{display:none;}
+  .admin-body{padding:0 18px 18px;}
+  .admin-user{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid rgba(43,50,64,0.65);font-size:13px;flex-wrap:wrap;}
+  .admin-user.rejected{opacity:0.55;}
+  .admin-meta{color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:11px;}
+  .admin-actions{display:flex;align-items:center;gap:6px;}
+  .auth-card{max-width:430px;margin:80px auto;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px;}
+  .auth-card h1{font-family:'Space Grotesk',sans-serif;margin:0 0 8px;font-size:28px;}
+  .auth-card p{color:var(--text-dim);font-size:13.5px;line-height:1.5;}
+  .auth-card form{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;}
+  .auth-card input{flex:1;min-width:220px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 10px;font-size:13px;}
+  .auth-card button{background:var(--signal-dim);border:none;color:#0a1613;font-weight:600;font-size:12px;padding:9px 14px;border-radius:6px;cursor:pointer;}
+  .auth-message{min-height:18px;margin-top:12px;color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:11px;}
+  footer{text-align:center;color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10.5px;margin-top:30px;letter-spacing:0.3px;}
+  @media(max-width:600px){.brand{font-size:26px;}.card-meta-row{gap:10px;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">VIBE <span class="tag">Vision Innovation &amp; Business Evolution</span><button class="lock-btn" id="sign-out-btn" style="margin-left:auto;">Sign out</button></div>
+    <div class="sub">Live operations tracker — 6 projects, shared across the team</div>
+  </header>
+
+  <div class="focus-pin">
+    <span class="focus-label">📌 This week</span>
+    <span id="focus-text"></span>
+    <input id="focus-edit-input" class="wwa-edit" style="display:none;flex:1;margin:0;" />
+    <button class="lock-btn" id="focus-edit-btn">🔒 Edit (Deoni only)</button>
+  </div>
+
+  <div class="pulse-box">
+    <svg id="pulseline" viewBox="0 0 900 46" preserveAspectRatio="none"></svg>
+    <div class="pulse-meta">
+      <span id="pulse-updated">loading…</span>
+      <span id="pulse-flags" class="flags">— active flags</span>
+    </div>
+  </div>
+
+  <div class="leader">
+    <div class="leader-head">
+      <div class="leader-title">◆ Leadership Flags</div>
+      <button class="lock-btn" id="lock-toggle">🔒 Edit (Deoni only)</button>
+    </div>
+    <div id="leader-display"></div>
+    <textarea id="leader-edit" style="display:none;"></textarea>
+  </div>
+
+  <div class="ferdi-panel">
+    <div class="leader-title" style="color:var(--amber);">◆ Decisions Needed from Ferdi</div>
+    <div id="ferdi-display"></div>
+  </div>
+
+  <div id="cards"></div>
+
+  <div class="mytasks-panel">
+    <div class="leader-title" style="color:var(--signal);">◆ My Tasks — <span id="mytasks-name"></span></div>
+    <div id="mytasks-display"></div>
+  </div>
+
+  <div id="admin-panel" style="display:none;"></div>
+  <datalist id="team-roster" style="display:none;">
+    <option value="Deoni"></option>
+    <option value="Sam"></option>
+    <option value="Stan"></option>
+    <option value="Mia"></option>
+    <option value="Elrine"></option>
+    <option value="Ferdi"></option>
+    <option value="Unassigned"></option>
+    <option value="External (Discovery)"></option>
+    <option value="Legal"></option>
+  </datalist>
+
+  <footer>VIBE · updates saved live to shared storage · not a substitute for the King Price / Discovery / BIPA paper trail</footer>
+</div>
+
+<script>
+const LABEL_OPTIONS = ['Unassigned','Legal','External (Discovery)'];
+let state = null;
+let users = [];
+let leaderEditing = false;
+let focusEditing = false;
+
+function isAdmin(){ return state?.me?.role === 'admin'; }
+function currentUser(){ return state?.me || {id:'', name:'Me'}; }
+function escapeHtml(value){
+  const d = document.createElement('div');
+  d.textContent = value == null ? '' : String(value);
+  return d.innerHTML;
+}
+
+async function api(path, options = {}){
+  const init = {
+    method: options.method || 'GET',
+    credentials: 'include',
+    headers: {'Accept':'application/json', ...(options.headers || {})}
+  };
+  if(options.body !== undefined){
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(options.body);
+  }
+  const res = await fetch(path, init);
+  let data = null;
+  const text = await res.text();
+  if(text){
+    try{ data = JSON.parse(text); }catch(e){ data = {message:text}; }
+  }
+  if(res.status === 401){
+    renderSignIn();
+    const err = new Error('Session expired');
+    err.status = 401;
+    throw err;
+  }
+  if(!res.ok){
+    const err = new Error(data?.error || data?.message || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data || {};
+}
+
+async function loadState(){
+  const params = new URLSearchParams(location.search);
+  const invalidLink = params.get('error') === 'invalid_link';
+  if(invalidLink) history.replaceState(null, '', location.pathname);
+  try{
+    state = normalizeState(await api('/api/state'));
+    users = await api('/api/users');
+    render();
+    if(invalidLink) showGlobalMessage('That link has expired or was already used. Request a new one.');
+  }catch(e){
+    if(e.status !== 401) showGlobalMessage(e.message, true);
+    if(invalidLink) renderSignIn('That link has expired or was already used. Request a new one.');
+  }
+}
+
+function normalizeState(s){
+  (s.initiatives || []).forEach(init=>{
+    init.owners = (init.owners || []).map(o=>typeof o === 'string' ? {id:o.toLowerCase(), name:o} : o);
+    if(init.keyRisk === undefined && init.outstanding !== undefined) init.keyRisk = init.outstanding;
+    init.keyRisk = init.keyRisk || [];
+    (init.tasks || []).forEach(t=>{
+      if(t.due === undefined) t.due = null;
+      if(!Array.isArray(t.owners)){
+        t.owners = t.owner ? ownerStringToUsers(t.owner) : [];
+      }
+      if(t.ownerLabel === undefined){
+        t.ownerLabel = LABEL_OPTIONS.includes(t.owner) ? t.owner : null;
+      }
+    });
+  });
+  return s;
+}
+
+function ownerStringToUsers(label){
+  if(LABEL_OPTIONS.includes(label)) return [];
+  return String(label).split('/').map(x=>x.trim()).filter(Boolean).map(name=>({id:name.toLowerCase(), name}));
+}
+
+function showGlobalMessage(message, isError){
+  let el = document.querySelector('.save-note');
+  if(!el){
+    el = document.createElement('div');
+    el.className = 'save-note';
+    document.querySelector('.wrap')?.prepend(el);
+  }
+  flashNote(el, message, isError);
+}
+
+function flashSaved(scope){
+  const notes = scope ? scope.querySelectorAll('.save-note') : document.querySelectorAll('.save-note');
+  notes.forEach(el=>flashNote(el, 'saved ✓'));
+}
+
+function flashNote(el, message, isError){
+  if(!el) return;
+  el.textContent = message;
+  el.classList.toggle('error', !!isError);
+  el.classList.add('visible');
+  if(!isError) setTimeout(()=>{el.classList.remove('visible');el.textContent='';},1400);
+}
+
+async function write(control, request, rollback, after){
+  const card = control?.closest?.('.card');
+  const note = card?.querySelector('.save-note') || control?.closest?.('td')?.querySelector('.save-note');
+  try{
+    const result = await request();
+    if(after) await after(result);
+    flashSaved(card || document);
+    return result;
+  }catch(e){
+    if(rollback) rollback();
+    if(e.status !== 401) flashNote(note || document.querySelector('.save-note'), e.message, true);
+    return null;
+  }
+}
+
+function reopen(idx){
+  const card = document.querySelectorAll('.card')[idx];
+  if(card) card.classList.add('open');
+}
+
+function statusWeight(s){ if(s==='blocked') return 2; if(s==='at-risk') return 1; return 0; }
+function statusLabel(s){
+  return ({
+    'on-track':'On Track','at-risk':'At Risk','blocked':'Blocked','paused':'Paused',
+    'not-started':'Not started','in-progress':'In progress','done':'Done'
+  })[s] || s;
+}
+function taskStatusOptions(current){
+  const opts = ['not-started','in-progress','blocked','paused','done'];
+  return opts.map(o=>`<option value="${o}" ${o===current?'selected':''}>${statusLabel(o)}</option>`).join('');
+}
+function daysLeftBadge(targetDate){
+  if(!targetDate) return '';
+  const target = new Date(targetDate + 'T00:00:00');
+  const now = new Date();
+  now.setHours(0,0,0,0);
+  const diffDays = Math.round((target - now) / 86400000);
+  let cls = 'ok', label;
+  if(diffDays < 0){ cls='overdue'; label = Math.abs(diffDays) + 'd overdue'; }
+  else if(diffDays <= 14){ cls='soon'; label = diffDays + 'd left'; }
+  else { cls='ok'; label = diffDays + 'd left'; }
+  return `<span class="days-left ${cls}">${label}</span>`;
+}
+
+function activeUsers(){
+  return users.filter(u=>!u.status || u.status === 'active');
+}
+
+function ownerOptions(selectedIds = []){
+  return activeUsers().map(u=>`<option value="${escapeHtml(u.id)}" ${selectedIds.includes(u.id)?'selected':''}>${escapeHtml(u.name)}</option>`).join('');
+}
+
+function taskOwnerOptions(t){
+  const selectedIds = (t.owners || []).map(o=>o.id);
+  const label = t.ownerLabel || ((t.owners || []).length ? null : 'Unassigned');
+  const personOptions = ownerOptions(selectedIds);
+  const labelOptions = LABEL_OPTIONS.map(l=>`<option value="label:${escapeHtml(l)}" ${label===l?'selected':''}>${escapeHtml(l)}</option>`).join('');
+  return personOptions + labelOptions;
+}
+
+function selectedTaskOwners(select){
+  const values = Array.from(select.selectedOptions).map(o=>o.value);
+  const label = values.find(v=>v.startsWith('label:'))?.slice(6) || null;
+  const userIds = label ? [] : values.filter(v=>!v.startsWith('label:'));
+  return {userIds, label};
+}
+
+function names(list){ return (list || []).map(o=>o.name).join(', '); }
+
+function renderPulse(){
+  const svgns = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById('pulseline');
+  svg.innerHTML = '';
+  const totalFlags = state.initiatives.reduce((a,i)=>a+statusWeight(i.status),0);
+  const w = 900, h = 46, mid = h/2;
+  let points = [];
+  const segments = 60;
+  for(let x=0;x<=segments;x++){
+    const px = (x/segments)*w;
+    let py = mid + Math.sin(x*0.5)*2;
+    if(x % 7 === 3) py -= 6 + totalFlags*3;
+    if(x % 11 === 5) py += 5 + totalFlags*2.4;
+    if(x % 17 === 9) py -= 4 + totalFlags*1.8;
+    points.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+  }
+  const path = document.createElementNS(svgns,'polyline');
+  path.setAttribute('points', points.join(' '));
+  path.setAttribute('fill','none');
+  path.setAttribute('stroke', totalFlags >= 6 ? '#f0555a' : (totalFlags >= 3 ? '#f5a940' : '#3fd9c2'));
+  path.setAttribute('stroke-width','2');
+  path.setAttribute('stroke-linejoin','round');
+  path.setAttribute('stroke-linecap','round');
+  svg.appendChild(path);
+  const flagsEl = document.getElementById('pulse-flags');
+  flagsEl.textContent = totalFlags + ' active risk flag' + (totalFlags===1?'':'s') + ' across 6 projects';
+  flagsEl.className = 'flags' + (totalFlags>=6?' hot':'');
+  document.getElementById('pulse-updated').textContent =
+    'last update: ' + (state.lastEdited?.by || '—') + ' · ' + (state.lastEdited?.at || '—');
+}
+
+function renderLeader(){
+  document.getElementById('lock-toggle').style.display = isAdmin() ? '' : 'none';
+  const disp = document.getElementById('leader-display');
+  disp.innerHTML = '<ul>' + state.leaderNotes.map(n=>`<li>${escapeHtml(n)}</li>`).join('') + '</ul>';
+  document.getElementById('leader-edit').value = state.leaderNotes.join('\n');
+}
+
+function renderFocus(){
+  document.getElementById('focus-text').textContent = state.focusThisWeek || '(not set)';
+  document.getElementById('focus-edit-input').value = state.focusThisWeek || '';
+  document.getElementById('focus-text').style.display = focusEditing ? 'none' : '';
+  document.getElementById('focus-edit-input').style.display = focusEditing ? 'block' : 'none';
+  document.getElementById('focus-edit-btn').textContent = focusEditing ? 'Save' : 'Edit';
+  document.getElementById('focus-edit-btn').style.display = isAdmin() ? '' : 'none';
+}
+
+function renderFerdiDecisions(){
+  const items = [];
+  state.initiatives.forEach(init=>{
+    init.tasks.forEach(t=>{
+      if((t.owners || []).some(o=>o.id === 'ferdi') && t.status !== 'done'){
+        items.push({project:init.name, task:t.name});
+      }
+    });
+  });
+  const el = document.getElementById('ferdi-display');
+  el.innerHTML = items.length
+    ? '<ul>' + items.map(i=>`<li><span class="proj-tag">${escapeHtml(i.project)}</span>${escapeHtml(i.task)}</li>`).join('') + '</ul>'
+    : '<div class="empty">Nothing currently waiting on Ferdi.</div>';
+}
+
+function renderMyTasks(){
+  const me = currentUser();
+  document.getElementById('mytasks-name').textContent = me.name || me.email || 'Me';
+  const items = [];
+  state.initiatives.forEach(init=>{
+    init.tasks.forEach(t=>{
+      if((t.owners || []).some(o=>o.id === me.id) && t.status !== 'done'){
+        items.push({projNum:init.num, projName:init.name, task:t.name, status:t.status, due:t.due});
+      }
+    });
+  });
+  items.sort((a,b)=>{
+    if(a.projNum !== b.projNum) return a.projNum - b.projNum;
+    if(a.due && b.due) return a.due.localeCompare(b.due);
+    if(a.due) return -1;
+    if(b.due) return 1;
+    return 0;
+  });
+  const el = document.getElementById('mytasks-display');
+  el.innerHTML = items.length
+    ? '<ol>' + items.map(i=>`<li><span class="proj-tag">${String(i.projNum)}. ${escapeHtml(i.projName)}</span>${escapeHtml(i.task)}<span class="mt-status status-${i.status}">${statusLabel(i.status)}</span>${i.due ? daysLeftBadge(i.due) : ''}</li>`).join('') + '</ol>'
+    : '<div class="empty">Nothing currently assigned.</div>';
+}
+
+function renderCards(){
+  const container = document.getElementById('cards');
+  container.innerHTML = '';
+  state.initiatives.forEach((init, idx)=>{
+    const card = document.createElement('div');
+    card.className = 'card';
+    const admin = isAdmin();
+    card.innerHTML = `
+      <div class="card-head">
+        <div class="card-title-row">
+          <span class="caret">▶</span>
+          <span class="card-num">${init.num}.</span>
+          <span class="card-title">${escapeHtml(init.name)}</span>
+          <span class="status-pill status-${init.status}">${statusLabel(init.status)}</span>
+        </div>
+      </div>
+      <div class="card-meta-row">
+        <div class="owners-row">
+          ${(init.owners || []).map(o=>`<span class="owners-chip">${escapeHtml(o.name)}${admin?`<button data-remove-owner="${idx}" data-user-id="${escapeHtml(o.id)}" title="remove">×</button>`:''}</span>`).join('')}
+          ${admin?`<span class="owner-add"><select class="owner-select" data-add-owner-input="${idx}"><option value="">+ owner</option>${ownerOptions((init.owners || []).map(o=>o.id))}</select><button data-add-owner-btn="${idx}">Add</button></span>`:''}
+        </div>
+        <span>${escapeHtml(init.target)}${daysLeftBadge(init.targetDate)}</span>
+      </div>
+      <div class="card-body">
+        <div class="section-label">Summary</div>
+        <p class="section-text">${escapeHtml(init.summary)}</p>
+
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Where We Are</span>
+          <button class="lock-btn" data-wwa-toggle="${idx}">✎ Edit</button>
+        </div>
+        <p class="section-text" data-wwa-display="${idx}">${escapeHtml(init.whereWeAre)}</p>
+        <textarea class="wwa-edit" data-init="${idx}" style="display:none;" rows="3">${escapeHtml(init.whereWeAre)}</textarea>
+
+        <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>Key Risk</span>
+          ${admin?`<button class="lock-btn" data-risk-lock="${idx}">✎ Edit</button>`:''}
+        </div>
+        <div class="outstanding-box" data-risk-display="${idx}"><ul>${(init.keyRisk || []).map(o=>`<li>${escapeHtml(o)}</li>`).join('')}</ul></div>
+        <textarea class="leader-edit-inline" data-risk-edit="${idx}" style="display:none;width:100%;min-height:100px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;border-radius:6px;padding:10px;line-height:1.6;">${(init.keyRisk || []).join('\n')}</textarea>
+
+        <div class="section-label">Tasks &amp; Responsible</div>
+        <table class="tasks">
+          <thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Due</th><th>Note</th></tr></thead>
+          <tbody>
+            ${(init.tasks || []).map((t,ti)=>`
+              <tr>
+                <td class="task-name">${escapeHtml(t.name)}</td>
+                <td><select multiple class="task-owner-select" data-init="${idx}" data-task="${ti}">${taskOwnerOptions(t)}</select></td>
+                <td><select class="task-status" data-init="${idx}" data-task="${ti}">${taskStatusOptions(t.status)}</select>${admin && (t.owners || []).length ? `<button class="nudge-btn" data-nudge="${idx}" data-task="${ti}">Nudge</button>`:''}${admin ? `<button class="nudge-btn" data-delete-task="${idx}" data-task="${ti}">Delete</button>`:''}<div class="save-note" data-nudge-note="${idx}-${ti}"></div></td>
+                <td><input type="date" class="task-due" data-init="${idx}" data-task="${ti}" value="${t.due || ''}">${t.due ? daysLeftBadge(t.due) : ''}</td>
+                <td><input class="task-note" data-init="${idx}" data-task="${ti}" value="${escapeHtml(t.note||'')}" placeholder="add a note..."></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="add-task-row">
+          <input type="text" placeholder="Add a new task..." data-add-init="${idx}">
+          <button data-add-btn="${idx}">Add</button>
+        </div>
+        <div class="save-note"></div>
+      </div>
+    `;
+    card.querySelector('.card-head').addEventListener('click', ()=>{ card.classList.toggle('open'); });
+    container.appendChild(card);
+  });
+  bindCardEvents(container);
+}
+
+function bindCardEvents(container){
+  container.querySelectorAll('.task-status').forEach(sel=>sel.addEventListener('change', async e=>{
+    const i = +e.target.dataset.init, ti = +e.target.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const old = task.status;
+    task.status = e.target.value;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{status:task.status}}), ()=>{task.status = old; e.target.value = old;});
+  }));
+  container.querySelectorAll('.task-note').forEach(inp=>inp.addEventListener('change', async e=>{
+    const i = +e.target.dataset.init, ti = +e.target.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const old = task.note || '';
+    task.note = e.target.value;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{note:task.note}}), ()=>{task.note = old; e.target.value = old;});
+  }));
+  container.querySelectorAll('.task-due').forEach(inp=>inp.addEventListener('change', async e=>{
+    const i = +e.target.dataset.init, ti = +e.target.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const old = task.due;
+    task.due = e.target.value || null;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{due:task.due}}), ()=>{task.due = old;}, null);
+    render(); reopen(i);
+  }));
+  container.querySelectorAll('.task-owner-select').forEach(sel=>sel.addEventListener('change', async e=>{
+    const i = +e.target.dataset.init, ti = +e.target.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const oldOwners = task.owners.slice(), oldLabel = task.ownerLabel;
+    const next = selectedTaskOwners(e.target);
+    task.owners = activeUsers().filter(u=>next.userIds.includes(u.id)).map(u=>({id:u.id, name:u.name}));
+    task.ownerLabel = next.label;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}/owners`, {method:'PUT', body:{userIds:next.userIds, label:next.label}}), ()=>{task.owners = oldOwners; task.ownerLabel = oldLabel;}, null);
+    render(); reopen(i);
+  }));
+  container.querySelectorAll('[data-remove-owner]').forEach(btn=>btn.addEventListener('click', async e=>{
+    e.stopPropagation();
+    const i = +btn.dataset.removeOwner, userId = btn.dataset.userId;
+    const init = state.initiatives[i];
+    const old = init.owners.slice();
+    init.owners = init.owners.filter(o=>o.id !== userId);
+    await write(btn, ()=>api(`/api/projects/${init.id}/owners/${encodeURIComponent(userId)}`, {method:'DELETE'}), ()=>{init.owners = old;});
+    render(); reopen(i);
+  }));
+  container.querySelectorAll('[data-add-owner-btn]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.addOwnerBtn;
+    const init = state.initiatives[idx];
+    const select = container.querySelector(`[data-add-owner-input="${idx}"]`);
+    const userId = select.value;
+    if(!userId) return;
+    const user = users.find(u=>u.id === userId);
+    const old = init.owners.slice();
+    if(user && !init.owners.some(o=>o.id === userId)) init.owners.push({id:user.id, name:user.name});
+    await write(btn, ()=>api(`/api/projects/${init.id}/owners`, {method:'POST', body:{userId}}), ()=>{init.owners = old;});
+    render(); reopen(idx);
+  }));
+  container.querySelectorAll('[data-wwa-toggle]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.wwaToggle;
+    const init = state.initiatives[idx];
+    const display = container.querySelector(`[data-wwa-display="${idx}"]`);
+    const edit = container.querySelector(`.wwa-edit[data-init="${idx}"]`);
+    if(edit.style.display === 'none'){
+      display.style.display = 'none'; edit.style.display = 'block'; btn.textContent = 'Save';
+    }else{
+      const old = init.whereWeAre;
+      init.whereWeAre = edit.value.trim();
+      await write(btn, ()=>api(`/api/projects/${init.id}`, {method:'PATCH', body:{whereWeAre:init.whereWeAre}}), ()=>{init.whereWeAre = old;});
+      render(); reopen(idx);
+    }
+  }));
+  container.querySelectorAll('[data-risk-lock]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.riskLock;
+    const init = state.initiatives[idx];
+    const display = container.querySelector(`[data-risk-display="${idx}"]`);
+    const edit = container.querySelector(`[data-risk-edit="${idx}"]`);
+    if(edit.style.display === 'none'){
+      display.style.display = 'none'; edit.style.display = 'block'; btn.textContent = 'Save';
+    }else{
+      const old = init.keyRisk.slice();
+      init.keyRisk = edit.value.split('\n').map(s=>s.trim()).filter(Boolean);
+      await write(btn, ()=>api(`/api/projects/${init.id}/risks`, {method:'PUT', body:{risks:init.keyRisk}}), ()=>{init.keyRisk = old;});
+      render(); reopen(idx);
+    }
+  }));
+  container.querySelectorAll('[data-add-btn]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.addBtn;
+    const init = state.initiatives[idx];
+    const input = container.querySelector(`[data-add-init="${idx}"]`);
+    const val = input.value.trim();
+    if(!val) return;
+    const tempTask = {id:`temp-${Date.now()}`, name:val, owners:[currentUser()], ownerLabel:null, status:'not-started', due:null, note:''};
+    init.tasks.push(tempTask);
+    input.value = '';
+    await write(btn, ()=>api(`/api/projects/${init.id}/tasks`, {method:'POST', body:{name:val}}), ()=>{init.tasks = init.tasks.filter(t=>t !== tempTask);}, result=>{ if(result.id) tempTask.id = result.id; });
+    render(); reopen(idx);
+  }));
+  container.querySelectorAll('[data-delete-task]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.deleteTask;
+    const ti = +btn.dataset.task;
+    const init = state.initiatives[idx];
+    const task = init.tasks[ti];
+    if(!confirm(`Delete task "${task.name}"?`)) return;
+    init.tasks.splice(ti, 1);
+    render(); reopen(idx);
+    try{
+      await api(`/api/tasks/${task.id}`, {method:'DELETE'});
+      flashSaved(document.querySelectorAll('.card')[idx]);
+    }catch(e){
+      init.tasks.splice(ti, 0, task);
+      render(); reopen(idx);
+      if(e.status !== 401) flashNote(document.querySelectorAll('.card')[idx]?.querySelector('.save-note'), e.message, true);
+    }
+  }));
+  container.querySelectorAll('[data-nudge]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const i = +btn.dataset.nudge, ti = +btn.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const note = container.querySelector(`[data-nudge-note="${i}-${ti}"]`);
+    try{
+      const res = await api(`/api/tasks/${task.id}/nudge`, {method:'POST'});
+      const parts = [];
+      if(res.sent?.length) parts.push('sent: ' + res.sent.join(', '));
+      if(res.skipped?.length) parts.push('skipped: ' + res.skipped.join(', '));
+      flashNote(note, parts.join(' · ') || 'nothing sent');
+    }catch(e){
+      if(e.status !== 401) flashNote(note, e.message, true);
+    }
+  }));
+}
+
+function renderAdminPanel(){
+  const mount = document.getElementById('admin-panel');
+  if(!isAdmin()){
+    mount.style.display = 'none';
+    mount.innerHTML = '';
+    return;
+  }
+  mount.style.display = '';
+  const order = {pending:0, active:1, rejected:2};
+  const rows = users.slice().sort((a,b)=>(order[a.status] ?? 1) - (order[b.status] ?? 1) || (a.name || '').localeCompare(b.name || '')).map(u=>{
+    const actions = u.status === 'pending'
+      ? `<button class="lock-btn" data-approve="${escapeHtml(u.id)}">Approve</button><button class="lock-btn" data-reject="${escapeHtml(u.id)}">Reject</button>`
+      : u.status === 'active'
+        ? `<select class="owner-select" data-role="${escapeHtml(u.id)}"><option value="member" ${u.role==='member'?'selected':''}>member</option><option value="admin" ${u.role==='admin'?'selected':''}>admin</option></select>`
+        : '';
+    return `<div class="admin-user ${u.status === 'rejected' ? 'rejected' : ''}">
+      <div><div>${escapeHtml(u.name || u.email)}</div><div class="admin-meta">${escapeHtml(u.email || '')} · ${escapeHtml(u.status || 'active')} · ${escapeHtml(u.role || 'member')}</div></div>
+      <div class="admin-actions">${actions}</div>
+    </div>`;
+  }).join('');
+  mount.innerHTML = `<details class="admin-panel" open><summary><div class="leader-title">◆ Admin Panel</div></summary><div class="admin-body">${rows}<div class="save-note"></div></div></details>`;
+  mount.querySelectorAll('[data-approve]').forEach(btn=>btn.addEventListener('click', async ()=>adminUserWrite(btn, ()=>api(`/api/users/${btn.dataset.approve}/approve`, {method:'POST'}))));
+  mount.querySelectorAll('[data-reject]').forEach(btn=>btn.addEventListener('click', async ()=>adminUserWrite(btn, ()=>api(`/api/users/${btn.dataset.reject}/reject`, {method:'POST'}))));
+  mount.querySelectorAll('[data-role]').forEach(sel=>sel.addEventListener('change', async ()=>{
+    const old = users.find(u=>u.id === sel.dataset.role)?.role || 'member';
+    await adminUserWrite(sel, ()=>api(`/api/users/${sel.dataset.role}`, {method:'PATCH', body:{role:sel.value}}), ()=>{ sel.value = old; });
+  }));
+}
+
+async function adminUserWrite(control, request, rollback){
+  const note = document.querySelector('#admin-panel .save-note');
+  try{
+    await request();
+    users = await api('/api/users');
+    renderAdminPanel();
+    flashNote(document.querySelector('#admin-panel .save-note'), 'saved ✓');
+  }catch(e){
+    if(rollback) rollback();
+    if(e.status !== 401) flashNote(note, e.message, true);
+  }
+}
+
+function render(){
+  renderPulse();
+  renderLeader();
+  renderFocus();
+  renderFerdiDecisions();
+  renderCards();
+  renderMyTasks();
+  renderAdminPanel();
+}
+
+document.getElementById('lock-toggle').addEventListener('click', async ()=>{
+  const display = document.getElementById('leader-display');
+  const edit = document.getElementById('leader-edit');
+  const btn = document.getElementById('lock-toggle');
+  if(!leaderEditing){
+    leaderEditing = true;
+    display.style.display='none';
+    edit.style.display='block';
+    btn.textContent = 'Save';
+  }else{
+    const old = state.leaderNotes.slice();
+    state.leaderNotes = edit.value.split('\n').map(s=>s.trim()).filter(Boolean);
+    await write(btn, ()=>api('/api/settings/leadership', {method:'PUT', body:{notes:state.leaderNotes}}), ()=>{state.leaderNotes = old;});
+    leaderEditing = false;
+    display.style.display='block';
+    edit.style.display='none';
+    btn.textContent = 'Edit';
+    render();
+  }
+});
+
+document.getElementById('focus-edit-btn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('focus-edit-btn');
+  const input = document.getElementById('focus-edit-input');
+  if(!focusEditing){
+    focusEditing = true;
+    renderFocus();
+    input.focus();
+  }else{
+    const old = state.focusThisWeek;
+    state.focusThisWeek = input.value.trim();
+    await write(btn, ()=>api('/api/settings/focus', {method:'PUT', body:{value:state.focusThisWeek}}), ()=>{state.focusThisWeek = old;});
+    focusEditing = false;
+    render();
+  }
+});
+
+document.getElementById('sign-out-btn').addEventListener('click', async ()=>{
+  try{
+    await api('/api/auth/logout', {method:'POST'});
+  }finally{
+    renderSignIn();
+  }
+});
+
+function renderSignIn(message){
+  document.body.innerHTML = `<div class="wrap"><div class="auth-card">
+    <h1>VIBE Operations</h1>
+    <p>Sign in with your team email to open the live operations tracker.</p>
+    <form id="signin-form">
+      <input type="email" id="signin-email" required placeholder="you@example.com" autocomplete="email">
+      <button type="submit">Send me a login link</button>
+    </form>
+    <div class="auth-message" id="signin-message">${message ? escapeHtml(message) : ''}</div>
+  </div></div>`;
+  document.getElementById('signin-form').addEventListener('submit', async e=>{
+    e.preventDefault();
+    const email = document.getElementById('signin-email').value.trim();
+    const msg = document.getElementById('signin-message');
+    try{
+      const res = await api('/api/auth/request', {method:'POST', body:{email}});
+      msg.textContent = res.message || 'If that address is recognised, check your inbox.';
+    }catch(err){
+      if(err.status !== 401) msg.textContent = 'If that address is recognised, check your inbox.';
+    }
+  });
+}
+
+loadState();
+</script>
+</body>
+</html>

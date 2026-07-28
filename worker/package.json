@@ -1,0 +1,22 @@
+{
+  "name": "vibe-tracker-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/run.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create vibe-tracker",
+    "db:schema": "wrangler d1 execute vibe-tracker --file=./schema.sql --remote",
+    "db:seed": "wrangler d1 execute vibe-tracker --file=./seed.sql --remote",
+    "db:schema:local": "wrangler d1 execute vibe-tracker --file=./schema.sql --local",
+    "db:seed:local": "wrangler d1 execute vibe-tracker --file=./seed.sql --local"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

@@ -1,0 +1,30 @@
+name = "vibe-tracker"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+# Serves the frontend from ../public and falls through to the Worker for /api/*
+[assets]
+directory = "../public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vibe-tracker"
+database_id = "PASTE_YOUR_DATABASE_ID_HERE"   # printed by: wrangler d1 create vibe-tracker
+
+[vars]
+# Public, safe to commit. Must exactly match the deployed URL, no trailing slash,
+# because magic links are built from it.
+APP_URL = "https://vibe-tracker.YOUR-SUBDOMAIN.workers.dev"
+
+# ---------------------------------------------------------------------------
+# Secrets. NEVER put these here. Set them with:
+#   npx wrangler secret put EMAILJS_SERVICE_ID
+#   npx wrangler secret put EMAILJS_TEMPLATE_ID
+#   npx wrangler secret put EMAILJS_PUBLIC_KEY
+#   npx wrangler secret put EMAILJS_PRIVATE_KEY
+#
+# EMAILJS_PRIVATE_KEY is the one that matters. It is what lets the Worker send
+# server-side. If it leaks, anyone can send email as you, up to your quota.
+# ---------------------------------------------------------------------------

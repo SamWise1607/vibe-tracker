@@ -150,10 +150,10 @@ section('Tasks: create, update, delete');
   const blank = await call('/api/projects/fortress/tasks', { method: 'POST', cookie, body: { name: '  ' } });
   check('blank task name rejected', blank.status === 400);
 
-  await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie, body: { status: 'in-progress', note: 'moving', due: '2026-09-01' } });
+  await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie, body: { status: 'in-progress', due: '2026-09-01' } });
   let row = env._rawDb.prepare('SELECT * FROM tasks WHERE id=?').get(created.id);
-  check('status, note and due all persisted',
-        row.status === 'in-progress' && row.note === 'moving' && row.due_date === '2026-09-01',
+  check('status and due both persisted',
+        row.status === 'in-progress' && row.due_date === '2026-09-01',
         JSON.stringify(row));
 
   await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie, body: { due: '' } });
@@ -289,18 +289,18 @@ section('State: task visibility is scoped for members, not for admins');
         memberState.ferdiDecisions.every((t) => (t.owners || []).some((o) => o.id === 'ferdi')));
 }
 
-section('Permissions: members can only edit tasks they own, and only status/note');
+section('Permissions: members can only edit tasks they own, and only status');
 {
   const member = await signIn('mia@visionbrokers.co.za');
 
   // Task 23 (mrcn): Mia is a co-owner.
   const ok = await call('/api/tasks/23', {
     method: 'PATCH', cookie: member,
-    body: { status: 'in-progress', note: 'moving along', name: 'hacked name' },
+    body: { status: 'in-progress', name: 'hacked name' },
   });
-  check('member can update status/note on her own task', ok.status === 200, `got ${ok.status}`);
-  const row = env._rawDb.prepare('SELECT status, note, name FROM tasks WHERE id=23').get();
-  check('status and note applied', row.status === 'in-progress' && row.note === 'moving along', JSON.stringify(row));
+  check('member can update status on her own task', ok.status === 200, `got ${ok.status}`);
+  const row = env._rawDb.prepare('SELECT status, name FROM tasks WHERE id=23').get();
+  check('status applied', row.status === 'in-progress', JSON.stringify(row));
   check('name field silently ignored for a member', row.name !== 'hacked name', row.name);
 
   // Task 24 (vib): only Stan owns it.
@@ -308,8 +308,92 @@ section('Permissions: members can only edit tasks they own, and only status/note
   check('member gets 403 editing a task she does not own', forbidden.status === 403, `got ${forbidden.status}`);
 
   const admin = await signIn('sam@visionbrokers.co.za');
-  const adminEdit = await call('/api/tasks/24', { method: 'PATCH', cookie: admin, body: { note: 'admin note' } });
+  const adminEdit = await call('/api/tasks/24', { method: 'PATCH', cookie: admin, body: { due: '2026-10-01' } });
   check('admin can edit any task regardless of ownership', adminEdit.status === 200, `got ${adminEdit.status}`);
+}
+
+section('Task notes: multiple boxes per task, any signed-in user');
+{
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  // Task 24 (vib) is Stan-only. Mia does not own it, but notes are open to
+  // any signed-in user regardless of ownership.
+  const add1 = await jsonOf(await call('/api/tasks/24/notes', { method: 'POST', cookie: member, body: { text: 'first note' } }));
+  check('a non-owner member can add a note', add1.ok && Number.isInteger(add1.id), JSON.stringify(add1));
+
+  const add2 = await jsonOf(await call('/api/tasks/24/notes', { method: 'POST', cookie: admin, body: { text: 'second note' } }));
+  check('a second note becomes its own box, not an overwrite', add2.ok && add2.id !== add1.id, JSON.stringify(add2));
+
+  const blank = await call('/api/tasks/24/notes', { method: 'POST', cookie: member, body: { text: '   ' } });
+  check('blank note text rejected', blank.status === 400);
+
+  const missing = await call('/api/tasks/99999/notes', { method: 'POST', cookie: member, body: { text: 'x' } });
+  check('adding a note to a non-existent task 404s', missing.status === 404);
+
+  const state = await jsonOf(await call('/api/state', { cookie: admin }));
+  const task24 = state.initiatives.flatMap((p) => p.tasks).find((t) => t.id === 24);
+  const newest = task24.notes.slice(-2);
+  check('GET /api/state exposes both new notes as separate {id, text} boxes, in order, appended after the seeded one',
+        newest.length === 2 && newest[0].text === 'first note' && newest[1].text === 'second note',
+        JSON.stringify(task24.notes));
+
+  const edit = await call(`/api/tasks/24/notes/${add1.id}`, { method: 'PATCH', cookie: admin, body: { text: 'edited note' } });
+  check('any signed-in user can edit a note someone else wrote', edit.status === 200, `got ${edit.status}`);
+  const editedRow = env._rawDb.prepare('SELECT body FROM task_notes WHERE id=?').get(add1.id);
+  check('edit persisted', editedRow.body === 'edited note', JSON.stringify(editedRow));
+
+  const wrongTask = await call(`/api/tasks/23/notes/${add1.id}`, { method: 'PATCH', cookie: admin, body: { text: 'x' } });
+  check('editing a note under the wrong task id 404s', wrongTask.status === 404);
+
+  const del = await call(`/api/tasks/24/notes/${add2.id}`, { method: 'DELETE', cookie: member });
+  check('any signed-in user can delete a note', del.status === 200, `got ${del.status}`);
+  check('note actually gone', !env._rawDb.prepare('SELECT 1 FROM task_notes WHERE id=?').get(add2.id));
+
+  const stateAfter = await jsonOf(await call('/api/state', { cookie: admin }));
+  const task24After = stateAfter.initiatives.flatMap((p) => p.tasks).find((t) => t.id === 24);
+  check('deleted note box is gone, the other two remain',
+        task24After.notes.length === task24.notes.length - 1 && !task24After.notes.some((n) => n.id === add2.id),
+        JSON.stringify(task24After.notes));
+}
+
+section('Projects: create and rename, admin-only');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+  const admin  = await signIn('sam@visionbrokers.co.za');
+
+  const memberCreate = await call('/api/projects', { method: 'POST', cookie: member, body: { name: 'Should not exist' } });
+  check('member gets 403 creating a project', memberCreate.status === 403, `got ${memberCreate.status}`);
+
+  const blank = await call('/api/projects', { method: 'POST', cookie: admin, body: { name: '   ' } });
+  check('blank project name rejected', blank.status === 400);
+
+  const created = await jsonOf(await call('/api/projects', { method: 'POST', cookie: admin, body: { name: 'Test Project' } }));
+  check('project created and returns an id', created.ok && typeof created.id === 'string', JSON.stringify(created));
+  check('id is slugified from the name', created.id === 'test-project', created.id);
+
+  const dup = await jsonOf(await call('/api/projects', { method: 'POST', cookie: admin, body: { name: 'Test Project' } }));
+  check('a name collision gets a numbered suffix instead of overwriting', dup.id === 'test-project-2', dup.id);
+
+  const state = await jsonOf(await call('/api/state', { cookie: admin }));
+  const newProject = state.initiatives.find((p) => p.id === created.id);
+  check('new project appears in state with defaults',
+        newProject && newProject.name === 'Test Project' && newProject.status === 'on-track' && newProject.tasks.length === 0,
+        JSON.stringify(newProject));
+  check('new project got the 7th num (after the 6 seeded projects)', newProject.num === 7, newProject.num);
+
+  const memberRename = await call(`/api/projects/${created.id}`, { method: 'PATCH', cookie: member, body: { name: 'Hacked' } });
+  check('member gets 403 renaming a project', memberRename.status === 403, `got ${memberRename.status}`);
+  const unchanged = env._rawDb.prepare('SELECT name FROM projects WHERE id=?').get(created.id);
+  check('name unchanged after the rejected member rename', unchanged.name === 'Test Project', unchanged.name);
+
+  const rename = await call(`/api/projects/${created.id}`, { method: 'PATCH', cookie: admin, body: { name: 'Renamed Project' } });
+  check('admin can rename a project', rename.status === 200, `got ${rename.status}`);
+  const renamed = env._rawDb.prepare('SELECT name FROM projects WHERE id=?').get(created.id);
+  check('rename persisted', renamed.name === 'Renamed Project', renamed.name);
+
+  const blankRename = await call(`/api/projects/${created.id}`, { method: 'PATCH', cookie: admin, body: { name: '  ' } });
+  check('blank rename rejected', blankRename.status === 400);
 }
 
 section('Permissions: nudge, delete and reassigning owners are admin-only');

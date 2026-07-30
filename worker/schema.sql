@@ -6,6 +6,7 @@ DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS magic_tokens;
 DROP TABLE IF EXISTS nudges;
 DROP TABLE IF EXISTS task_owners;
+DROP TABLE IF EXISTS task_notes;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS key_risks;
 DROP TABLE IF EXISTS project_owners;
@@ -96,6 +97,23 @@ CREATE TABLE task_owners (
 );
 
 CREATE INDEX idx_task_owners_user ON task_owners(user_id);
+
+-- A task can carry several free-text notes, each its own entry, rather than
+-- one field that gets overwritten. `tasks.note` above is kept only as a
+-- legacy column for anything not yet migrated; the app reads/writes notes
+-- through this table now.
+CREATE TABLE task_notes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_by TEXT REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT REFERENCES users(id)
+);
+
+CREATE INDEX idx_task_notes_task ON task_notes(task_id, sort_order);
 
 -- ---------------------------------------------------------------
 -- Nudges (audit trail so people cannot be spammed)

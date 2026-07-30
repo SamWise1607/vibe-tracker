@@ -164,7 +164,7 @@ app.get('/api/me', requireAuth, (c) => json(c, c.get('user')));
 app.get('/api/state', requireAuth, async (c) => {
   const db = c.env.DB;
 
-  const [projects, projOwners, risks, tasks, taskOwners, settings, lastEdit] = await Promise.all([
+  const [projects, projOwners, risks, tasks, taskOwners, taskNotes, settings, lastEdit] = await Promise.all([
     db.prepare(`SELECT * FROM projects ORDER BY num`).all(),
     db.prepare(`SELECT po.project_id, u.id, u.name FROM project_owners po
                   JOIN users u ON u.id = po.user_id ORDER BY u.name`).all(),
@@ -172,6 +172,7 @@ app.get('/api/state', requireAuth, async (c) => {
     db.prepare(`SELECT * FROM tasks ORDER BY project_id, sort_order, id`).all(),
     db.prepare(`SELECT t.task_id, u.id, u.name FROM task_owners t
                   JOIN users u ON u.id = t.user_id ORDER BY u.name`).all(),
+    db.prepare(`SELECT id, task_id, body FROM task_notes ORDER BY task_id, sort_order, id`).all(),
     db.prepare(`SELECT key, value FROM settings`).all(),
     db.prepare(`SELECT u.name AS by_name, p.updated_at AS at FROM projects p
                   LEFT JOIN users u ON u.id = p.updated_by
@@ -184,12 +185,13 @@ app.get('/api/state', requireAuth, async (c) => {
   const ownersByProject = groupBy(projOwners.results, 'project_id', (r) => ({ id: r.id, name: r.name }));
   const risksByProject  = groupBy(risks.results, 'project_id', (r) => r.body);
   const ownersByTask    = groupBy(taskOwners.results, 'task_id', (r) => ({ id: r.id, name: r.name }));
+  const notesByTask     = groupBy(taskNotes.results, 'task_id', (r) => ({ id: r.id, text: r.body }));
   const allTasksByProject = groupBy(tasks.results, 'project_id', (t) => ({
     id: t.id,
     name: t.name,
     status: t.status,
     due: t.due_date,
-    note: t.note,
+    notes: notesByTask[t.id] || [],      // array of {id, text}, each its own box
     owners: ownersByTask[t.id] || [],
     ownerLabel: t.owner_label,          // 'Legal', 'External (Discovery)', 'Unassigned'
   }));
@@ -261,23 +263,82 @@ const PROJECT_FIELDS = {
   summary: 'summary',
   whereWeAre: 'where_we_are',
 };
+// Renaming a project is admin-only, unlike the rest of PROJECT_FIELDS which
+// any signed-in user can edit. Kept as its own map so the permission check
+// is an explicit branch, not buried inside the generic field loop.
+const ADMIN_ONLY_PROJECT_FIELDS = { name: 'name' };
+
+function slugify(name) {
+  return String(name).toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'project';
+}
+
+/** Creating a project is admin-only. No milestones, matches the rest of the
+ * structure: a project is just a name plus the same fields PATCH can edit. */
+app.post('/api/projects', requireAuth, requireAdmin, async (c) => {
+  const actor = c.get('user');
+  const { name, status, target, targetDate, summary, whereWeAre } = await c.req.json().catch(() => ({}));
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return json(c, { error: 'Project needs a name' }, 400);
+
+  const allowedStatus = ['on-track', 'at-risk', 'blocked', 'paused'];
+  const cleanStatus = allowedStatus.includes(status) ? status : 'on-track';
+
+  // id from the name ("Fortress Africa" -> "fortress"), falling back to
+  // "-2", "-3" etc. on a collision so it never silently overwrites another
+  // project's id.
+  const base = slugify(cleanName);
+  let id = base, n = 2;
+  while (await c.env.DB.prepare(`SELECT 1 FROM projects WHERE id = ?1`).bind(id).first()) {
+    id = `${base}-${n++}`;
+  }
+
+  const max = await c.env.DB.prepare(`SELECT COALESCE(MAX(num), 0) AS m FROM projects`).first();
+
+  await c.env.DB.prepare(
+    `INSERT INTO projects (id, num, name, status, target_text, target_date, summary, where_we_are, updated_at, updated_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`
+  ).bind(
+    id, max.m + 1, cleanName, cleanStatus, String(target || '').trim(),
+    String(targetDate || '').trim() || null, String(summary || '').trim(), String(whereWeAre || '').trim(),
+    nowIso(), actor.id,
+  ).run();
+
+  await logAction(c.env, {
+    actorId: actor.id, action: 'project_created', entityType: 'project', entityId: id,
+    detail: `"${cleanName}" created`,
+  });
+  return json(c, { ok: true, id });
+});
 
 app.patch('/api/projects/:id', requireAuth, async (c) => {
   const id = c.req.param('id');
+  const actor = c.get('user');
   const body = await c.req.json().catch(() => ({}));
 
+  if ('name' in body) {
+    if (actor.role !== 'admin') return json(c, { error: 'Renaming a project is admin-only' }, 403);
+    if (!String(body.name || '').trim()) return json(c, { error: 'Project needs a name' }, 400);
+  }
+
+  const fields = actor.role === 'admin' ? { ...PROJECT_FIELDS, ...ADMIN_ONLY_PROJECT_FIELDS } : PROJECT_FIELDS;
   const sets = [], vals = [];
-  for (const [key, column] of Object.entries(PROJECT_FIELDS)) {
-    if (key in body) { sets.push(`${column} = ?`); vals.push(body[key] === '' && key === 'targetDate' ? null : body[key]); }
+  for (const [key, column] of Object.entries(fields)) {
+    if (key in body) {
+      const v = key === 'name' ? String(body.name).trim()
+              : (body[key] === '' && key === 'targetDate' ? null : body[key]);
+      sets.push(`${column} = ?`); vals.push(v);
+    }
   }
   if (!sets.length) return json(c, { error: 'Nothing to update' }, 400);
 
   sets.push('updated_at = ?', 'updated_by = ?');
-  vals.push(nowIso(), c.get('user').id, id);
+  vals.push(nowIso(), actor.id, id);
 
   await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
   await logAction(c.env, {
-    actorId: c.get('user').id, action: 'project_updated', entityType: 'project', entityId: id,
+    actorId: actor.id, action: 'project_updated', entityType: 'project', entityId: id,
     detail: `${id}: ${Object.keys(body).join(', ')} updated`,
   });
   return json(c, { ok: true });
@@ -379,10 +440,10 @@ app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   ).bind(projectId).first();
 
   const res = await c.env.DB.prepare(
-    `INSERT INTO tasks (project_id, name, status, due_date, note, sort_order, updated_at, updated_by)
-     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5, ?6, ?7)`
+    `INSERT INTO tasks (project_id, name, status, due_date, sort_order, updated_at, updated_by)
+     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5, ?6)`
   ).bind(
-    projectId, String(name).trim(), String(due || '').trim() || null, String(note || '').trim(),
+    projectId, String(name).trim(), String(due || '').trim() || null,
     max.m + 1, nowIso(), actor.id,
   ).run();
 
@@ -393,6 +454,16 @@ app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
     ));
   }
 
+  // The "Add task" form's optional note field becomes note box #1, not a
+  // write to the old single-note column.
+  const initialNote = String(note || '').trim();
+  if (initialNote) {
+    await c.env.DB.prepare(
+      `INSERT INTO task_notes (task_id, body, sort_order, created_at, created_by, updated_at, updated_by)
+       VALUES (?1, ?2, 0, ?3, ?4, ?3, ?4)`
+    ).bind(taskId, initialNote, nowIso(), actor.id).run();
+  }
+
   await touchProject(c.env, projectId, actor.id);
   await logAction(c.env, {
     actorId: actor.id, action: 'task_created', entityType: 'task', entityId: taskId,
@@ -401,10 +472,11 @@ app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   return json(c, { ok: true, id: taskId });
 });
 
-const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', note: 'note', ownerLabel: 'owner_label' };
-// Members can only ever touch status and note on a task, and only one they
-// own. Everything else (name, due date, non-person label) is admin-only.
-const MEMBER_TASK_FIELDS = { status: 'status', note: 'note' };
+const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', ownerLabel: 'owner_label' };
+// Members can only ever touch status on a task, and only one they own.
+// Notes are a separate free-for-all (see TASK NOTES below); everything else
+// here (name, due date, non-person label) is admin-only.
+const MEMBER_TASK_FIELDS = { status: 'status' };
 
 app.patch('/api/tasks/:id', requireAuth, async (c) => {
   const id = Number(c.req.param('id'));
@@ -446,6 +518,89 @@ app.patch('/api/tasks/:id', requireAuth, async (c) => {
   return json(c, { ok: true });
 });
 
+// ===========================================================================
+// TASK NOTES (multiple free-text entries per task, not one overwritable field)
+// ===========================================================================
+//
+// Any signed-in user can add, edit or delete a note box on any task,
+// regardless of who owns it. Looser than task editing generally (which is
+// owner-or-admin), by design: notes are quick context left for whoever
+// picks the task up next, not something worth gating. They are plain and
+// freeform, no author or timestamp shown, and not restorable if deleted.
+
+app.post('/api/tasks/:id/notes', requireAuth, async (c) => {
+  const taskId = Number(c.req.param('id'));
+  const actor = c.get('user');
+  const { text } = await c.req.json().catch(() => ({}));
+  const body = String(text || '').trim();
+  if (!body) return json(c, { error: 'Note needs some text' }, 400);
+
+  const task = await c.env.DB.prepare(`SELECT * FROM tasks WHERE id = ?1`).bind(taskId).first();
+  if (!task) return json(c, { error: 'No such task' }, 404);
+
+  const max = await c.env.DB.prepare(
+    `SELECT COALESCE(MAX(sort_order), -1) AS m FROM task_notes WHERE task_id = ?1`
+  ).bind(taskId).first();
+
+  const res = await c.env.DB.prepare(
+    `INSERT INTO task_notes (task_id, body, sort_order, created_at, created_by, updated_at, updated_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5)`
+  ).bind(taskId, body, max.m + 1, nowIso(), actor.id).run();
+
+  await touchProject(c.env, task.project_id, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_note_added', entityType: 'task', entityId: taskId,
+    detail: `Note added to "${task.name}"`,
+  });
+  return json(c, { ok: true, id: res.meta.last_row_id });
+});
+
+app.patch('/api/tasks/:id/notes/:noteId', requireAuth, async (c) => {
+  const taskId = Number(c.req.param('id'));
+  const noteId = Number(c.req.param('noteId'));
+  const actor = c.get('user');
+  const { text } = await c.req.json().catch(() => ({}));
+  const body = String(text || '').trim();
+  if (!body) return json(c, { error: 'Note needs some text' }, 400);
+
+  const note = await c.env.DB.prepare(
+    `SELECT n.*, t.project_id FROM task_notes n JOIN tasks t ON t.id = n.task_id
+      WHERE n.id = ?1 AND n.task_id = ?2`
+  ).bind(noteId, taskId).first();
+  if (!note) return json(c, { error: 'No such note' }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE task_notes SET body = ?1, updated_at = ?2, updated_by = ?3 WHERE id = ?4`
+  ).bind(body, nowIso(), actor.id, noteId).run();
+
+  await touchProject(c.env, note.project_id, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_note_updated', entityType: 'task', entityId: taskId,
+    detail: `Note edited on task ${taskId}`,
+  });
+  return json(c, { ok: true });
+});
+
+app.delete('/api/tasks/:id/notes/:noteId', requireAuth, async (c) => {
+  const taskId = Number(c.req.param('id'));
+  const noteId = Number(c.req.param('noteId'));
+  const actor = c.get('user');
+
+  const note = await c.env.DB.prepare(
+    `SELECT n.*, t.project_id FROM task_notes n JOIN tasks t ON t.id = n.task_id
+      WHERE n.id = ?1 AND n.task_id = ?2`
+  ).bind(noteId, taskId).first();
+  if (!note) return json(c, { error: 'No such note' }, 404);
+
+  await c.env.DB.prepare(`DELETE FROM task_notes WHERE id = ?1`).bind(noteId).run();
+  await touchProject(c.env, note.project_id, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_note_deleted', entityType: 'task', entityId: taskId,
+    detail: `Note deleted from task ${taskId}`,
+  });
+  return json(c, { ok: true });
+});
+
 /** Admin-only: deleting captures a full snapshot first, so it can be undone
  * from the Activity Log if it turns out to be a mistake. */
 app.delete('/api/tasks/:id', requireAuth, requireAdmin, async (c) => {
@@ -455,12 +610,15 @@ app.delete('/api/tasks/:id', requireAuth, requireAdmin, async (c) => {
   const task = await c.env.DB.prepare(`SELECT * FROM tasks WHERE id = ?1`).bind(id).first();
   if (!task) return json(c, { error: 'No such task' }, 404);
   const owners = await c.env.DB.prepare(`SELECT user_id FROM task_owners WHERE task_id = ?1`).bind(id).all();
+  const notes = await c.env.DB.prepare(
+    `SELECT body, sort_order, created_at, created_by, updated_at, updated_by FROM task_notes WHERE task_id = ?1 ORDER BY sort_order`
+  ).bind(id).all();
 
   await c.env.DB.prepare(`DELETE FROM tasks WHERE id = ?1`).bind(id).run();
 
   await logAction(c.env, {
     actorId: actor.id, action: 'task_deleted', entityType: 'task', entityId: id,
-    snapshot: { ...task, ownerIds: owners.results.map((r) => r.user_id) },
+    snapshot: { ...task, ownerIds: owners.results.map((r) => r.user_id), notes: notes.results },
     detail: `"${task.name}" deleted from ${task.project_id}`,
   });
   return json(c, { ok: true });
@@ -709,6 +867,14 @@ app.post('/api/audit/:id/restore', requireAuth, requireAdmin, async (c) => {
   if (Array.isArray(snap.ownerIds) && snap.ownerIds.length) {
     await c.env.DB.batch(snap.ownerIds.map((uid) =>
       c.env.DB.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?1, ?2)`).bind(snap.id, uid)
+    ));
+  }
+  if (Array.isArray(snap.notes) && snap.notes.length) {
+    await c.env.DB.batch(snap.notes.map((n) =>
+      c.env.DB.prepare(
+        `INSERT INTO task_notes (task_id, body, sort_order, created_at, created_by, updated_at, updated_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+      ).bind(snap.id, n.body, n.sort_order, n.created_at, n.created_by, n.updated_at, n.updated_by)
     ));
   }
 

@@ -7,9 +7,11 @@
  * Run from the worker folder:  node tools/make-seed.js
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT  = path.resolve(__dirname, '..', '..');   // vibe-tracker/
 const DRAFT = path.join(ROOT, '.reference', 'vibe_dashboardDRAFT.ORIGINAL.html');
 const OUT   = path.join(ROOT, 'worker', 'seed.sql');
@@ -63,7 +65,7 @@ out.push('-- VIBE Operations Tracker: seed data');
 out.push('-- Generated from vibe_dashboardDRAFT.html. Do not hand-edit; regenerate instead.');
 out.push('-- Run with: npx wrangler d1 execute vibe-tracker --file=./seed.sql --remote');
 out.push('');
-out.push('DELETE FROM task_owners; DELETE FROM tasks; DELETE FROM key_risks;');
+out.push('DELETE FROM task_notes; DELETE FROM task_owners; DELETE FROM tasks; DELETE FROM key_risks;');
 out.push('DELETE FROM project_owners; DELETE FROM projects; DELETE FROM settings; DELETE FROM users;');
 out.push('');
 out.push('-- Users -------------------------------------------------------');
@@ -97,6 +99,12 @@ for (const p of seedData.initiatives){
     out.push(`INSERT INTO tasks (id,project_id,name,status,due_date,note,owner_label,sort_order,updated_by) VALUES (${taskId},${q(p.id)},${q(t.name)},${q(t.status)},${q(t.due ?? null)},${q(t.note || '')},${q(label)},${i},'deoni');`);
     for (const uid of userIds){
       out.push(`INSERT INTO task_owners (task_id,user_id) VALUES (${taskId},${q(uid)});`);
+    }
+    // Notes are now their own boxes, not one overwritable field. The draft's
+    // single note string becomes note box #1 so nothing from the original
+    // data is lost.
+    if (t.note && String(t.note).trim()){
+      out.push(`INSERT INTO task_notes (task_id,body,sort_order,created_by,updated_by) VALUES (${taskId},${q(String(t.note).trim())},0,'deoni','deoni');`);
     }
   });
   out.push('');

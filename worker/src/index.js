@@ -163,6 +163,23 @@ app.get('/api/me', requireAuth, (c) => json(c, c.get('user')));
 
 app.get('/api/state', requireAuth, async (c) => {
   const db = c.env.DB;
+  const actualUser = c.get('user');
+
+  // Read-only "view as": an admin can preview exactly what another active
+  // user would see (their task scoping, their admin/member split), without
+  // ever being able to act as them. `me` below always stays the real
+  // signed-in admin; `viewingAs` is what the frontend uses to render the
+  // preview and to know it must disable every write control while active.
+  let scopeUser = actualUser;
+  let viewingAs = null;
+  const viewAsId = c.req.query('viewAs');
+  if (viewAsId) {
+    if (actualUser.role !== 'admin') return json(c, { error: 'View-as is admin-only' }, 403);
+    const target = await getUser(c.env, viewAsId);
+    if (!target || target.status !== 'active') return json(c, { error: 'No such active user' }, 404);
+    scopeUser = target;
+    viewingAs = { id: target.id, name: target.name, role: target.role };
+  }
 
   const [projects, projOwners, risks, tasks, taskOwners, taskNotes, settings, lastEdit] = await Promise.all([
     db.prepare(`SELECT * FROM projects ORDER BY num`).all(),
@@ -179,8 +196,11 @@ app.get('/api/state', requireAuth, async (c) => {
                  ORDER BY p.updated_at DESC LIMIT 1`).first(),
   ]);
 
-  const me = c.get('user');
-  const isAdmin = me.role === 'admin';
+  // isAdmin and the task scoping below are both computed against scopeUser,
+  // which is the real signed-in user normally, or whoever an admin is
+  // previewing when viewingAs is set. This is what makes it a real preview
+  // of their POV rather than just a cosmetic label.
+  const isAdmin = scopeUser.role === 'admin';
 
   const ownersByProject = groupBy(projOwners.results, 'project_id', (r) => ({ id: r.id, name: r.name }));
   const risksByProject  = groupBy(risks.results, 'project_id', (r) => r.body);
@@ -202,7 +222,7 @@ app.get('/api/state', requireAuth, async (c) => {
   const tasksByProject = isAdmin ? allTasksByProject : Object.fromEntries(
     Object.entries(allTasksByProject).map(([projectId, projectTasks]) => [
       projectId,
-      projectTasks.filter((t) => (t.owners || []).some((o) => o.id === me.id)),
+      projectTasks.filter((t) => (t.owners || []).some((o) => o.id === scopeUser.id)),
     ])
   );
 
@@ -220,7 +240,8 @@ app.get('/api/state', requireAuth, async (c) => {
   const settingsMap = Object.fromEntries(settings.results.map((s) => [s.key, s.value]));
 
   return json(c, {
-    me,
+    me: actualUser,
+    viewingAs,
     focusThisWeek: settingsMap.focus_this_week || '',
     leaderNotes: safeParse(settingsMap.leadership_notes, []),
     ferdiDecisions,
@@ -256,17 +277,18 @@ app.get('/api/users', requireAuth, async (c) => {
 // PROJECTS
 // ===========================================================================
 
-const PROJECT_FIELDS = {
-  status: 'status',
-  target: 'target_text',
-  targetDate: 'target_date',
-  summary: 'summary',
-  whereWeAre: 'where_we_are',
+// Where We Are is the one project field any signed-in user can edit, its own
+// long-standing inline "Edit" control on the card. Everything else
+// (name, status, target, target date, summary) is admin-only: name always
+// was, and the rest moved to admin-only once a real "Edit details" button
+// made them easy to reach, rather than leaving them open just because
+// nothing surfaced them in the UI before.
+const PROJECT_FIELDS = { whereWeAre: 'where_we_are' };
+const ADMIN_ONLY_PROJECT_FIELDS = {
+  name: 'name', status: 'status', target: 'target_text',
+  targetDate: 'target_date', summary: 'summary',
 };
-// Renaming a project is admin-only, unlike the rest of PROJECT_FIELDS which
-// any signed-in user can edit. Kept as its own map so the permission check
-// is an explicit branch, not buried inside the generic field loop.
-const ADMIN_ONLY_PROJECT_FIELDS = { name: 'name' };
+const PROJECT_STATUS_VALUES = ['on-track', 'at-risk', 'blocked', 'paused'];
 
 function slugify(name) {
   return String(name).toLowerCase().trim()
@@ -282,8 +304,7 @@ app.post('/api/projects', requireAuth, requireAdmin, async (c) => {
   const cleanName = String(name || '').trim();
   if (!cleanName) return json(c, { error: 'Project needs a name' }, 400);
 
-  const allowedStatus = ['on-track', 'at-risk', 'blocked', 'paused'];
-  const cleanStatus = allowedStatus.includes(status) ? status : 'on-track';
+  const cleanStatus = PROJECT_STATUS_VALUES.includes(status) ? status : 'on-track';
 
   // id from the name ("Fortress Africa" -> "fortress"), falling back to
   // "-2", "-3" etc. on a collision so it never silently overwrites another
@@ -317,9 +338,15 @@ app.patch('/api/projects/:id', requireAuth, async (c) => {
   const actor = c.get('user');
   const body = await c.req.json().catch(() => ({}));
 
-  if ('name' in body) {
-    if (actor.role !== 'admin') return json(c, { error: 'Renaming a project is admin-only' }, 403);
-    if (!String(body.name || '').trim()) return json(c, { error: 'Project needs a name' }, 400);
+  const adminFieldRequested = Object.keys(ADMIN_ONLY_PROJECT_FIELDS).some((key) => key in body);
+  if (adminFieldRequested && actor.role !== 'admin') {
+    return json(c, { error: 'Editing project details is admin-only' }, 403);
+  }
+  if ('name' in body && !String(body.name || '').trim()) {
+    return json(c, { error: 'Project needs a name' }, 400);
+  }
+  if ('status' in body && !PROJECT_STATUS_VALUES.includes(body.status)) {
+    return json(c, { error: 'Invalid status' }, 400);
   }
 
   const fields = actor.role === 'admin' ? { ...PROJECT_FIELDS, ...ADMIN_ONLY_PROJECT_FIELDS } : PROJECT_FIELDS;

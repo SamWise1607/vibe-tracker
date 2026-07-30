@@ -52,6 +52,8 @@
   .leader-title{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:16px;letter-spacing:0.5px;text-transform:uppercase;color:var(--signal);display:flex;align-items:center;gap:8px;}
   .lock-btn{background:none;border:1px solid var(--border);color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;}
   .lock-btn:hover{border-color:var(--signal-dim);color:var(--signal);}
+  button:disabled,.lock-btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .lock-btn:disabled:hover{border-color:var(--border);color:var(--text-dim);}
   .leader ul{margin:0;padding-left:18px;}
   .leader li{font-size:15px;line-height:1.6;color:#dfe4ea;margin-bottom:4px;}
   .leader textarea{width:100%;min-height:120px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:13px;border-radius:6px;padding:10px;line-height:1.6;}
@@ -102,9 +104,9 @@
   .task-owner{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
   select.task-status{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:4px 7px;border-radius:5px;}
   .task-notes{display:flex;flex-direction:column;gap:6px;}
-  .task-note-box{display:flex;align-items:center;gap:5px;background:rgba(32,37,47,0.7);border:1px solid var(--border);border-radius:6px;padding:5px 6px;}
-  .task-note-box input{flex:1;min-width:0;background:transparent;border:none;color:var(--text);font-size:14px;font-family:'Inter',sans-serif;padding:2px 0;}
-  .task-note-box input:focus{outline:none;color:var(--text);}
+  .task-note-box{display:flex;align-items:flex-start;gap:5px;background:rgba(32,37,47,0.7);border:1px solid var(--border);border-radius:6px;padding:5px 6px;}
+  .task-note-box textarea{flex:1;min-width:0;background:transparent;border:none;color:var(--text);font-size:14px;font-family:'Inter',sans-serif;padding:2px 0;resize:none;overflow:hidden;line-height:1.45;}
+  .task-note-box textarea:focus{outline:none;color:var(--text);}
   .task-note-box button{background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;}
   .task-note-box button:hover{color:var(--red);}
   .add-note-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
@@ -131,11 +133,28 @@
   .save-note.error{color:var(--red);}
   .nudge-btn{background:none;border:1px solid var(--border);color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:4px 8px;border-radius:5px;cursor:pointer;margin-left:6px;}
   .nudge-btn:hover{border-color:var(--signal-dim);color:var(--signal);}
-  .projects-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 12px;}
+  .preview-banner{display:none;background:rgba(245,169,64,0.16);border:1px solid rgba(245,169,64,0.7);border-left:5px solid var(--amber);border-radius:8px;color:#ffe4ad;padding:12px 14px;margin:14px 0 18px;font-size:15px;font-weight:600;}
+  .preview-banner.active{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .preview-banner button{border-color:rgba(245,169,64,0.65);color:#ffe4ad;}
+  .projects-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 12px;flex-wrap:wrap;}
+  .project-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .view-as-control{display:none;align-items:center;gap:7px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:11.5px;}
+  .view-as-control.active{display:flex;}
+  .view-as-control select{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:5px 8px;border-radius:6px;}
+  .readonly-preview input:not(#new-project-name),.readonly-preview textarea,.readonly-preview select,.readonly-preview .card button:not(.card-head button){opacity:0.62;}
   .new-project-row{display:none;margin:-4px 0 14px;background:rgba(32,37,47,0.55);border:1px solid var(--border);border-radius:8px;padding:10px;}
   .new-project-row.open{display:block;}
-  .new-project-row form{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;}
-  .new-project-row input{flex:1;min-width:260px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14.5px;padding:8px 10px;}
+  .new-project-row form{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(140px,0.8fr);gap:9px;}
+  .new-project-row label{display:flex;flex-direction:column;gap:4px;color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.4px;}
+  .new-project-row input,.new-project-row select,.new-project-row textarea{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;padding:7px 10px;}
+  .new-project-row textarea{font-family:'Inter',sans-serif;line-height:1.45;resize:vertical;}
+  .new-project-row .task-note-field,.new-project-row .task-form-actions,.new-project-row .save-note{grid-column:1 / -1;}
+  .project-details-edit{display:none;background:rgba(32,37,47,0.55);border:1px solid var(--border);border-radius:8px;padding:10px;margin:0 0 14px;grid-template-columns:minmax(180px,1fr) minmax(140px,0.7fr);gap:9px;}
+  .project-details-edit.open{display:grid;}
+  .project-details-edit label{display:flex;flex-direction:column;gap:4px;color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:0.4px;}
+  .project-details-edit input,.project-details-edit select,.project-details-edit textarea{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;padding:7px 10px;}
+  .project-details-edit textarea{font-family:'Inter',sans-serif;line-height:1.45;resize:vertical;}
+  .project-details-edit .task-note-field,.project-details-edit .task-form-actions{grid-column:1 / -1;}
   .admin-panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin:0 0 22px;overflow:hidden;}
   .admin-panel summary{cursor:pointer;padding:14px 18px;list-style:none;}
   .admin-panel summary::-webkit-details-marker{display:none;}
@@ -150,6 +169,7 @@
   .auth-card form{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;}
   .auth-card input{flex:1;min-width:220px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:10px 11px;font-size:14.5px;}
   .auth-card button{background:var(--signal-dim);border:none;color:#0a1613;font-weight:600;font-size:13px;padding:10px 15px;border-radius:6px;cursor:pointer;}
+  .auth-card button:disabled{opacity:0.5;cursor:not-allowed;}
   .auth-message{min-height:18px;margin-top:12px;color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:11px;}
   footer{text-align:center;color:var(--text-faint);font-family:'IBM Plex Mono',monospace;font-size:10.5px;margin-top:30px;letter-spacing:0.3px;}
   @media(max-width:600px){.brand{font-size:26px;}.card-meta-row{gap:10px;}}
@@ -161,6 +181,11 @@
     <div class="brand">VIBE <span class="tag">Vision Innovation &amp; Business Evolution</span><button class="lock-btn" id="sign-out-btn" style="margin-left:auto;">Sign out</button></div>
     <div class="sub">Live operations tracker — 6 projects, shared across the team</div>
   </header>
+
+  <div class="preview-banner" id="preview-banner">
+    <span id="preview-banner-text"></span>
+    <button class="lock-btn" id="preview-stop-banner">Stop previewing</button>
+  </div>
 
   <div class="focus-pin">
     <span class="focus-label">📌 This week</span>
@@ -193,13 +218,44 @@
 
   <div class="projects-head">
     <div class="leader-title">◆ Projects</div>
-    <button class="lock-btn" id="new-project-toggle" style="display:none;">+ New Project</button>
+    <div class="project-actions">
+      <div class="view-as-control" id="view-as-control">
+        <span>View as</span>
+        <select id="view-as-select"><option value="">Select person...</option></select>
+        <button class="lock-btn" id="view-as-stop" style="display:none;">Stop previewing</button>
+      </div>
+      <button class="lock-btn" id="new-project-toggle" style="display:none;">+ New Project</button>
+    </div>
   </div>
   <div class="new-project-row" id="new-project-row">
     <form id="new-project-form">
-      <input type="text" id="new-project-name" required placeholder="Project name...">
-      <button type="submit" class="lock-btn">Create</button>
-      <button type="button" class="lock-btn" id="new-project-cancel">Cancel</button>
+      <label>Name
+        <input type="text" id="new-project-name" required placeholder="Project name...">
+      </label>
+      <label>Status
+        <select id="new-project-status">
+          <option value="on-track">On track</option>
+          <option value="at-risk">At risk</option>
+          <option value="blocked">Blocked</option>
+          <option value="paused">Paused</option>
+        </select>
+      </label>
+      <label>Target
+        <input type="text" id="new-project-target" placeholder="e.g. Target: end Aug 2026 (King Price)">
+      </label>
+      <label>Target date
+        <input type="date" id="new-project-target-date">
+      </label>
+      <label class="task-note-field">Summary
+        <textarea id="new-project-summary" rows="2" placeholder="What this project is..."></textarea>
+      </label>
+      <label class="task-note-field">Where We Are
+        <textarea id="new-project-where" rows="2" placeholder="Current state..."></textarea>
+      </label>
+      <div class="task-form-actions">
+        <button type="submit" class="lock-btn">Create</button>
+        <button type="button" class="lock-btn" id="new-project-cancel">Cancel</button>
+      </div>
       <div class="save-note" id="new-project-note"></div>
     </form>
   </div>
@@ -234,8 +290,10 @@ let auditLog = null;
 let leaderEditing = false;
 let focusEditing = false;
 
-function isAdmin(){ return state?.me?.role === 'admin'; }
-function currentUser(){ return state?.me || {id:'', name:'Me'}; }
+function isAdmin(){ return (state?.viewingAs?.role ?? state?.me?.role) === 'admin'; }
+function isRealAdmin(){ return state?.me?.role === 'admin'; }
+function isPreviewing(){ return !!state?.viewingAs; }
+function currentUser(){ return state?.viewingAs || state?.me || {id:'', name:'Me'}; }
 function escapeHtml(value){
   const d = document.createElement('div');
   d.textContent = value == null ? '' : String(value);
@@ -272,12 +330,13 @@ async function api(path, options = {}){
   return data || {};
 }
 
-async function loadState(){
+async function loadState(viewAs){
   const params = new URLSearchParams(location.search);
   const invalidLink = params.get('error') === 'invalid_link';
   if(invalidLink) history.replaceState(null, '', location.pathname);
   try{
-    state = normalizeState(await api('/api/state'));
+    const path = viewAs ? `/api/state?viewAs=${encodeURIComponent(viewAs)}` : '/api/state';
+    state = normalizeState(await api(path));
     users = await api('/api/users');
     render();
     if(invalidLink) showGlobalMessage('That link has expired or was already used. Request a new one.');
@@ -338,6 +397,11 @@ function flashNote(el, message, isError){
 async function write(control, request, rollback, after){
   const card = control?.closest?.('.card');
   const note = card?.querySelector('.save-note') || control?.closest?.('td')?.querySelector('.save-note');
+  if(isPreviewing()){
+    if(rollback) rollback();
+    flashNote(note || document.querySelector('.save-note'), 'Read-only preview, stop previewing to make changes.', true);
+    return null;
+  }
   try{
     const result = await request();
     if(after) await after(result);
@@ -364,6 +428,10 @@ function statusLabel(s){
 }
 function taskStatusOptions(current){
   const opts = ['not-started','in-progress','blocked','paused','done'];
+  return opts.map(o=>`<option value="${o}" ${o===current?'selected':''}>${statusLabel(o)}</option>`).join('');
+}
+function projectStatusOptions(current){
+  const opts = ['on-track','at-risk','blocked','paused'];
   return opts.map(o=>`<option value="${o}" ${o===current?'selected':''}>${statusLabel(o)}</option>`).join('');
 }
 function daysLeftBadge(targetDate){
@@ -417,19 +485,33 @@ function taskOwnerAddOptions(t){
 }
 
 function taskNotes(t, idx, ti){
+  const disabled = isPreviewing() ? 'disabled' : '';
   const notes = (t.notes || []).map(note=>`<div class="task-note-box" data-note-box="${idx}-${ti}-${escapeHtml(note.id)}">
-    <input value="${escapeHtml(note.text || '')}" data-task-note-edit="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" aria-label="Task note">
-    <button data-delete-task-note="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" title="delete note">&times;</button>
+    <textarea rows="1" data-task-note-edit="${idx}" data-init="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" aria-label="Task note" ${disabled}>${escapeHtml(note.text || '')}</textarea>
+    <button data-delete-task-note="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" title="delete note" ${disabled}>&times;</button>
   </div>`).join('');
   return `<div class="task-notes">
     ${notes}
     <div class="add-note-row" data-add-note-row="${idx}-${ti}">
-      <button type="button" data-add-note-toggle="${idx}" data-task="${ti}">+ add note</button>
-      <input type="text" placeholder="New note..." data-add-note-input="${idx}" data-task="${ti}">
-      <button type="button" data-add-note-btn="${idx}" data-task="${ti}" style="display:none;">Add</button>
+      <button type="button" data-add-note-toggle="${idx}" data-task="${ti}" ${disabled}>+ add note</button>
+      <input type="text" placeholder="New note..." data-add-note-input="${idx}" data-task="${ti}" ${disabled}>
+      <button type="button" data-add-note-btn="${idx}" data-task="${ti}" style="display:none;" ${disabled}>Add</button>
       <div class="save-note" data-note-save="${idx}-${ti}"></div>
     </div>
   </div>`;
+}
+
+function growNoteTextarea(el){
+  if(!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+
+function applyPreviewReadOnly(container){
+  if(!isPreviewing()) return;
+  container.querySelectorAll('.card input, .card textarea, .card select, .card button').forEach(el=>{
+    el.disabled = true;
+  });
 }
 
 function names(list){ return (list || []).map(o=>o.name).join(', '); }
@@ -515,11 +597,36 @@ function renderMyTasks(){
     : '<div class="empty">Nothing currently assigned.</div>';
 }
 
+function renderPreviewControls(){
+  const viewing = state?.viewingAs || null;
+  const banner = document.getElementById('preview-banner');
+  const bannerText = document.getElementById('preview-banner-text');
+  const control = document.getElementById('view-as-control');
+  const select = document.getElementById('view-as-select');
+  const stop = document.getElementById('view-as-stop');
+  const canPreview = isRealAdmin();
+  control.classList.toggle('active', canPreview);
+  banner.classList.toggle('active', !!viewing);
+  stop.style.display = viewing ? '' : 'none';
+  bannerText.textContent = viewing ? `Viewing as ${viewing.name || viewing.email || viewing.id} (${viewing.role || 'member'}) - read-only` : '';
+  if(canPreview){
+    const current = viewing?.id || '';
+    const options = activeUsers()
+      .filter(u=>u.id !== state.me?.id)
+      .map(u=>`<option value="${escapeHtml(u.id)}" ${u.id === current ? 'selected' : ''}>${escapeHtml(u.name || u.email || u.id)}</option>`)
+      .join('');
+    select.innerHTML = `<option value="">Select person...</option>${options}`;
+    select.value = current;
+  }else{
+    select.innerHTML = '<option value="">Select person...</option>';
+  }
+}
+
 function renderProjectControls(){
   const toggle = document.getElementById('new-project-toggle');
   const row = document.getElementById('new-project-row');
-  toggle.style.display = isAdmin() ? '' : 'none';
-  if(!isAdmin()){
+  toggle.style.display = isRealAdmin() ? '' : 'none';
+  if(!isRealAdmin()){
     row.classList.remove('open');
     document.getElementById('new-project-form')?.reset();
   }
@@ -530,8 +637,9 @@ function renderCards(){
   container.innerHTML = '';
   state.initiatives.forEach((init, idx)=>{
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (isPreviewing() ? ' readonly-preview' : '');
     const admin = isAdmin();
+    const disabled = isPreviewing() ? 'disabled' : '';
     card.innerHTML = `
       <div class="card-head">
         <div class="card-title-row">
@@ -539,8 +647,9 @@ function renderCards(){
           <span class="card-num">${init.num}.</span>
           <span class="card-title" data-project-title="${idx}">${escapeHtml(init.name)}</span>
           <input class="wwa-edit" data-project-title-input="${idx}" value="${escapeHtml(init.name)}" style="display:none;width:280px;margin:0;padding:6px 9px;">
-          ${admin?`<button class="lock-btn" data-project-rename="${idx}">Edit</button>`:''}
+          ${admin?`<button class="lock-btn" data-project-rename="${idx}" ${disabled}>Edit</button>`:''}
           <span class="status-pill status-${init.status}">${statusLabel(init.status)}</span>
+          ${admin?`<button class="lock-btn" data-project-details-toggle="${idx}" ${disabled}>✎ Edit details</button>`:''}
         </div>
       </div>
       <div class="card-meta-row">
@@ -553,6 +662,25 @@ function renderCards(){
       <div class="card-body">
         <div class="section-label">Summary</div>
         <p class="section-text">${escapeHtml(init.summary)}</p>
+        ${admin?`
+        <div class="project-details-edit" data-project-details-panel="${idx}">
+          <label>Status
+            <select data-project-details-status="${idx}">${projectStatusOptions(init.status)}</select>
+          </label>
+          <label>Target date
+            <input type="date" data-project-details-target-date="${idx}" value="${init.targetDate || ''}">
+          </label>
+          <label class="task-note-field">Target
+            <input type="text" data-project-details-target="${idx}" value="${escapeHtml(init.target || '')}">
+          </label>
+          <label class="task-note-field">Summary
+            <textarea rows="3" data-project-details-summary="${idx}">${escapeHtml(init.summary || '')}</textarea>
+          </label>
+          <div class="task-form-actions">
+            <button type="button" class="lock-btn" data-project-details-cancel="${idx}">Cancel</button>
+            <button type="button" class="lock-btn" data-project-details-save="${idx}">Save</button>
+          </div>
+        </div>`:''}
 
         <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;">
           <span>Where We Are</span>
@@ -619,6 +747,7 @@ function renderCards(){
     container.appendChild(card);
   });
   bindCardEvents(container);
+  applyPreviewReadOnly(container);
 }
 
 function bindCardEvents(container){
@@ -657,6 +786,50 @@ function bindCardEvents(container){
       }
     });
   });
+  container.querySelectorAll('[data-project-details-toggle]').forEach(btn=>btn.addEventListener('click', e=>{
+    e.stopPropagation();
+    const idx = +btn.dataset.projectDetailsToggle;
+    const panel = container.querySelector(`[data-project-details-panel="${idx}"]`);
+    if(isPreviewing()){
+      flashNote(document.querySelectorAll('.card')[idx]?.querySelector('.save-note'), 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
+    panel?.classList.add('open');
+    container.querySelector(`[data-project-details-status="${idx}"]`)?.focus();
+  }));
+  container.querySelectorAll('[data-project-details-cancel]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const idx = +btn.dataset.projectDetailsCancel;
+    const init = state.initiatives[idx];
+    const panel = container.querySelector(`[data-project-details-panel="${idx}"]`);
+    container.querySelector(`[data-project-details-status="${idx}"]`).value = init.status || 'on-track';
+    container.querySelector(`[data-project-details-target="${idx}"]`).value = init.target || '';
+    container.querySelector(`[data-project-details-target-date="${idx}"]`).value = init.targetDate || '';
+    container.querySelector(`[data-project-details-summary="${idx}"]`).value = init.summary || '';
+    panel?.classList.remove('open');
+  }));
+  container.querySelectorAll('[data-project-details-save]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const idx = +btn.dataset.projectDetailsSave;
+    const init = state.initiatives[idx];
+    if(isPreviewing()){
+      flashNote(document.querySelectorAll('.card')[idx]?.querySelector('.save-note'), 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
+    const old = {
+      status: init.status,
+      target: init.target,
+      targetDate: init.targetDate,
+      summary: init.summary,
+    };
+    const body = {
+      status: container.querySelector(`[data-project-details-status="${idx}"]`).value,
+      target: container.querySelector(`[data-project-details-target="${idx}"]`).value.trim(),
+      targetDate: container.querySelector(`[data-project-details-target-date="${idx}"]`).value || null,
+      summary: container.querySelector(`[data-project-details-summary="${idx}"]`).value.trim(),
+    };
+    Object.assign(init, body);
+    await write(btn, ()=>api(`/api/projects/${init.id}`, {method:'PATCH', body}), ()=>Object.assign(init, old));
+    render(); reopen(idx);
+  }));
   container.querySelectorAll('.task-status').forEach(sel=>sel.addEventListener('change', async e=>{
     const i = +e.target.dataset.init, ti = +e.target.dataset.task;
     const task = state.initiatives[i].tasks[ti];
@@ -665,6 +838,8 @@ function bindCardEvents(container){
     await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{status:task.status}}), ()=>{task.status = old; e.target.value = old;});
   }));
   container.querySelectorAll('[data-task-note-edit]').forEach(inp=>{
+    growNoteTextarea(inp);
+    inp.addEventListener('input', e=>growNoteTextarea(e.target));
     inp.addEventListener('keydown', e=>{ if(e.key === 'Enter') e.target.blur(); });
     inp.addEventListener('change', async e=>{
       const i = +e.target.dataset.taskNoteEdit, ti = +e.target.dataset.task;
@@ -879,6 +1054,10 @@ function bindCardEvents(container){
     const ti = +btn.dataset.task;
     const init = state.initiatives[idx];
     const task = init.tasks[ti];
+    if(isPreviewing()){
+      flashNote(document.querySelectorAll('.card')[idx]?.querySelector('.save-note'), 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
     if(!confirm(`Delete task "${task.name}"?`)) return;
     init.tasks.splice(ti, 1);
     render(); reopen(idx);
@@ -895,6 +1074,10 @@ function bindCardEvents(container){
     const i = +btn.dataset.nudge, ti = +btn.dataset.task;
     const task = state.initiatives[i].tasks[ti];
     const note = container.querySelector(`[data-nudge-note="${i}-${ti}"]`);
+    if(isPreviewing()){
+      flashNote(note, 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
     try{
       const res = await api(`/api/tasks/${task.id}/nudge`, {method:'POST'});
       const parts = [];
@@ -957,6 +1140,10 @@ function renderAdminPanel(){
 
 async function adminUserWrite(control, request, rollback){
   const note = document.querySelector('#admin-panel .save-note');
+  if(isPreviewing()){
+    flashNote(note, 'Read-only preview, stop previewing to make changes.', true);
+    return;
+  }
   try{
     await request();
     users = await api('/api/users');
@@ -992,9 +1179,17 @@ async function loadAuditLog(panel){
   }
 }
 
+async function stopPreview(){
+  await loadState();
+}
+
 function bindAuditRestore(scope){
   scope.querySelectorAll('[data-restore-audit]').forEach(btn=>btn.addEventListener('click', async ()=>{
     const note = document.querySelector('#admin-panel [data-audit-note]');
+    if(isPreviewing()){
+      flashNote(note, 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
     try{
       await api(`/api/audit/${btn.dataset.restoreAudit}/restore`, {method:'POST'});
       state = normalizeState(await api('/api/state'));
@@ -1014,6 +1209,7 @@ function render(){
   renderLeader();
   renderFocus();
   renderFerdiDecisions();
+  renderPreviewControls();
   renderProjectControls();
   renderCards();
   renderMyTasks();
@@ -1057,6 +1253,19 @@ document.getElementById('focus-edit-btn').addEventListener('click', async ()=>{
   }
 });
 
+document.getElementById('view-as-select').addEventListener('change', async e=>{
+  const userId = e.target.value;
+  if(!userId) return;
+  try{
+    await loadState(userId);
+  }catch(err){
+    if(err.status !== 401) showGlobalMessage(err.message, true);
+  }
+});
+
+document.getElementById('view-as-stop').addEventListener('click', async ()=>stopPreview());
+document.getElementById('preview-stop-banner').addEventListener('click', async ()=>stopPreview());
+
 document.getElementById('new-project-toggle').addEventListener('click', ()=>{
   const row = document.getElementById('new-project-row');
   row.classList.add('open');
@@ -1074,12 +1283,23 @@ document.getElementById('new-project-cancel').addEventListener('click', ()=>{
 document.getElementById('new-project-form').addEventListener('submit', async e=>{
   e.preventDefault();
   const form = e.target;
-  const nameInput = document.getElementById('new-project-name');
   const note = document.getElementById('new-project-note');
-  const name = nameInput.value.trim();
+  const name = document.getElementById('new-project-name').value.trim();
   if(!name) return;
+  if(isPreviewing()){
+    flashNote(note, 'Read-only preview, stop previewing to make changes.', true);
+    return;
+  }
+  const body = {
+    name,
+    status: document.getElementById('new-project-status').value,
+    target: document.getElementById('new-project-target').value.trim(),
+    targetDate: document.getElementById('new-project-target-date').value || null,
+    summary: document.getElementById('new-project-summary').value.trim(),
+    whereWeAre: document.getElementById('new-project-where').value.trim(),
+  };
   try{
-    await api('/api/projects', {method:'POST', body:{name}});
+    await api('/api/projects', {method:'POST', body});
     form.reset();
     await loadState();
     const row = document.getElementById('new-project-row');
@@ -1111,13 +1331,20 @@ function renderSignIn(message){
   </div></div>`;
   document.getElementById('signin-form').addEventListener('submit', async e=>{
     e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    if(btn.disabled) return;
     const email = document.getElementById('signin-email').value.trim();
     const msg = document.getElementById('signin-message');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
     try{
       const res = await api('/api/auth/request', {method:'POST', body:{email}});
       msg.textContent = res.message || 'If that address is recognised, check your inbox.';
+      btn.textContent = 'Link sent';
     }catch(err){
       if(err.status !== 401) msg.textContent = 'If that address is recognised, check your inbox.';
+      btn.disabled = false;
+      btn.textContent = 'Send me a login link';
     }
   });
 }

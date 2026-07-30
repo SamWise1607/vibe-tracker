@@ -289,6 +289,39 @@ section('State: task visibility is scoped for members, not for admins');
         memberState.ferdiDecisions.every((t) => (t.owners || []).some((o) => o.id === 'ferdi')));
 }
 
+section('View as: read-only admin preview of another user\'s POV');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+  const admin  = await signIn('sam@visionbrokers.co.za');
+
+  const memberTries = await call('/api/state?viewAs=stan', { cookie: member });
+  check('a member gets 403 trying to view as anyone', memberTries.status === 403, `got ${memberTries.status}`);
+
+  const bogus = await call('/api/state?viewAs=nobody', { cookie: admin });
+  check('viewing as an unknown user 404s', bogus.status === 404, `got ${bogus.status}`);
+
+  const ownState  = await jsonOf(await call('/api/state', { cookie: admin }));
+  check('a normal call has no viewingAs', ownState.viewingAs === null, JSON.stringify(ownState.viewingAs));
+
+  const asMia = await jsonOf(await call('/api/state?viewAs=mia', { cookie: admin }));
+  check('viewingAs identifies Mia', asMia.viewingAs?.id === 'mia' && asMia.viewingAs?.role === 'member', JSON.stringify(asMia.viewingAs));
+  check('"me" stays the real admin, not the previewed user', asMia.me.id === 'sam', JSON.stringify(asMia.me));
+
+  const miaOwnState = await jsonOf(await call('/api/state', { cookie: member }));
+  const miaTasksDirect = miaOwnState.initiatives.flatMap((p) => p.tasks).map((t) => t.id).sort();
+  const miaTasksViaAdmin = asMia.initiatives.flatMap((p) => p.tasks).map((t) => t.id).sort();
+  check('an admin viewing as Mia sees exactly the tasks Mia herself sees, no more, no less',
+        JSON.stringify(miaTasksDirect) === JSON.stringify(miaTasksViaAdmin),
+        `mia direct: ${JSON.stringify(miaTasksDirect)}, via admin: ${JSON.stringify(miaTasksViaAdmin)}`);
+
+  const asFerdi = await jsonOf(await call('/api/state?viewAs=ferdi', { cookie: admin }));
+  check('viewing as another admin identifies them as an admin', asFerdi.viewingAs?.role === 'admin', JSON.stringify(asFerdi.viewingAs));
+  const adminOwnTaskCount = ownState.initiatives.flatMap((p) => p.tasks).length;
+  const asFerdiTaskCount = asFerdi.initiatives.flatMap((p) => p.tasks).length;
+  check('admin-as-admin preview sees the full unscoped task set, same count as any admin would',
+        asFerdiTaskCount === adminOwnTaskCount, `${asFerdiTaskCount} vs ${adminOwnTaskCount}`);
+}
+
 section('Permissions: members can only edit tasks they own, and only status');
 {
   const member = await signIn('mia@visionbrokers.co.za');
@@ -394,6 +427,39 @@ section('Projects: create and rename, admin-only');
 
   const blankRename = await call(`/api/projects/${created.id}`, { method: 'PATCH', cookie: admin, body: { name: '  ' } });
   check('blank rename rejected', blankRename.status === 400);
+}
+
+section('Projects: editing status/target/summary is admin-only, Where We Are stays open');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+  const admin  = await signIn('sam@visionbrokers.co.za');
+
+  const memberEdit = await call('/api/projects/fortress', {
+    method: 'PATCH', cookie: member, body: { status: 'blocked', target: 'hacked', summary: 'hacked' },
+  });
+  check('member gets 403 editing status/target/summary', memberEdit.status === 403, `got ${memberEdit.status}`);
+  const unchanged = env._rawDb.prepare('SELECT status, target_text, summary FROM projects WHERE id=?').get('fortress');
+  check('nothing changed after the rejected member edit',
+        unchanged.status === 'at-risk' && unchanged.target !== 'hacked' && unchanged.summary !== 'hacked',
+        JSON.stringify(unchanged));
+
+  const memberWwa = await call('/api/projects/fortress', { method: 'PATCH', cookie: member, body: { whereWeAre: 'member update' } });
+  check('member can still edit Where We Are, unaffected by the tightened fields', memberWwa.status === 200, `got ${memberWwa.status}`);
+  const wwaRow = env._rawDb.prepare('SELECT where_we_are FROM projects WHERE id=?').get('fortress');
+  check('Where We Are actually persisted', wwaRow.where_we_are === 'member update', JSON.stringify(wwaRow));
+
+  const adminEdit = await call('/api/projects/fortress', {
+    method: 'PATCH', cookie: admin, body: { status: 'blocked', target: 'New target text', targetDate: '2026-12-01', summary: 'New summary' },
+  });
+  check('admin can edit status/target/targetDate/summary', adminEdit.status === 200, `got ${adminEdit.status}`);
+  const adminRow = env._rawDb.prepare('SELECT status, target_text, target_date, summary FROM projects WHERE id=?').get('fortress');
+  check('admin edit persisted',
+        adminRow.status === 'blocked' && adminRow.target_text === 'New target text' &&
+        adminRow.target_date === '2026-12-01' && adminRow.summary === 'New summary',
+        JSON.stringify(adminRow));
+
+  const badStatus = await call('/api/projects/fortress', { method: 'PATCH', cookie: admin, body: { status: 'wizard' } });
+  check('invalid project status rejected', badStatus.status === 400, `got ${badStatus.status}`);
 }
 
 section('Permissions: nudge, delete and reassigning owners are admin-only');

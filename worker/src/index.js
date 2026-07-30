@@ -216,15 +216,24 @@ app.get('/api/state', requireAuth, async (c) => {
     ownerLabel: t.owner_label,          // 'Legal', 'External (Discovery)', 'Unassigned'
   }));
 
-  // Members only see tasks they are personally an owner of. Everything else
-  // on a project (summary, status, Key Risk, target date) stays visible to
-  // everyone, this scoping applies to the per-project task list only.
-  const tasksByProject = isAdmin ? allTasksByProject : Object.fromEntries(
-    Object.entries(allTasksByProject).map(([projectId, projectTasks]) => [
-      projectId,
-      projectTasks.filter((t) => (t.owners || []).some((o) => o.id === scopeUser.id)),
-    ])
+  // Members see a project at all if they are either a named project owner
+  // (the project_owners list shown as chips on the card) OR own at least
+  // one task on it. A project matching neither does not appear for them,
+  // card and all. Once a project is visible to them, they see every task
+  // on it, not just their own, they just cannot edit anyone else's
+  // (enforced in PATCH /api/tasks/:id, unchanged by this). Admins always
+  // see everything.
+  const memberVisibleProjectIds = new Set(
+    projects.results
+      .filter((p) => {
+        const isProjectOwner = (ownersByProject[p.id] || []).some((o) => o.id === scopeUser.id);
+        const ownsATask = (allTasksByProject[p.id] || []).some((t) => (t.owners || []).some((o) => o.id === scopeUser.id));
+        return isProjectOwner || ownsATask;
+      })
+      .map((p) => p.id)
   );
+  const visibleProjects = isAdmin ? projects.results : projects.results.filter((p) => memberVisibleProjectIds.has(p.id));
+  const tasksByProject = allTasksByProject;
 
   // "Decisions Needed from Ferdi" is a team-wide status signal, not private
   // task data, so it is always built from the full unfiltered set, even for
@@ -246,7 +255,7 @@ app.get('/api/state', requireAuth, async (c) => {
     leaderNotes: safeParse(settingsMap.leadership_notes, []),
     ferdiDecisions,
     lastEdited: { by: lastEdit?.by_name || '—', at: (lastEdit?.at || '').slice(0, 10) || '—' },
-    initiatives: projects.results.map((p) => ({
+    initiatives: visibleProjects.map((p) => ({
       id: p.id,
       num: p.num,
       name: p.name,

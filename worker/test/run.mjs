@@ -263,22 +263,52 @@ section('Permissions: members cannot do admin things');
   check('member can still add a task', task.status === 200);
 }
 
-section('State: task visibility is scoped for members, not for admins');
+section('State: project visibility is scoped for members, not for admins');
 {
   const member = await signIn('mia@visionbrokers.co.za');
   const admin  = await signIn('deoni@visionric.co.za');
 
   const memberState = await jsonOf(await call('/api/state', { cookie: member }));
+  const memberProjectIds = memberState.initiatives.map((p) => p.id);
   const memberTasks = memberState.initiatives.flatMap((p) => p.tasks);
   check('Mia sees at least one task', memberTasks.length > 0);
-  check('every task Mia sees actually has her as an owner',
-        memberTasks.every((t) => (t.owners || []).some((o) => o.id === 'mia')),
-        JSON.stringify(memberTasks.map((t) => t.id)));
-  check('Mia cannot see task 24, which is Stan-only', !memberTasks.some((t) => t.id === 24));
+
+  // A member sees a project at all if they are EITHER a named project owner
+  // (the project_owners chip list on the card) OR own >=1 task on it, and
+  // once visible sees every task on it, not just their own.
+  // Mia owns task 7 (fortress) and task 23 (mrcn), via task ownership.
+  check('Mia sees fortress (owns task 7 there)', memberProjectIds.includes('fortress'));
+  check('Mia sees mrcn (owns task 23 there)', memberProjectIds.includes('mrcn'));
+  const fortressForMia = memberState.initiatives.find((p) => p.id === 'fortress');
+  check('Mia sees ALL of fortress\'s tasks, not just her own (task 1, owned by Deoni only, is visible to her)',
+        fortressForMia.tasks.some((t) => t.id === 1 && !(t.owners || []).some((o) => o.id === 'mia')),
+        JSON.stringify(fortressForMia.tasks.map((t) => t.id)));
+
+  // Mia is a named project_owners row on vpic, and owns no *task* there.
+  // That still counts, being a project owner is enough on its own.
+  check('Mia sees vpic, because she is a named project owner there, even though she owns no task on it',
+        memberProjectIds.includes('vpic'), JSON.stringify(memberProjectIds));
+  const vpicForMia = memberState.initiatives.find((p) => p.id === 'vpic');
+  check('Mia sees ALL of vpic\'s tasks, none of which are hers',
+        vpicForMia.tasks.length > 0 && vpicForMia.tasks.every((t) => !(t.owners || []).some((o) => o.id === 'mia')),
+        JSON.stringify(vpicForMia.tasks.map((t) => t.id)));
+
+  // vdirect: Mia is neither a project owner nor a task owner there (sam,
+  // elrine, and the "External (Discovery)" label own its tasks), so it's
+  // a project that should genuinely disappear for her. (Not using vib for
+  // this check: an earlier "add project owner" test in this same run adds
+  // Mia to vib's project_owners, which correctly makes it visible to her
+  // under this rule, that's the rule working, not a bug.)
+  check('Mia does not see vdirect at all (neither a project owner nor a task owner there)',
+        !memberProjectIds.includes('vdirect'), JSON.stringify(memberProjectIds));
+  check('Mia cannot see task 28, which is on vdirect', !memberTasks.some((t) => t.id === 28));
 
   const adminState = await jsonOf(await call('/api/state', { cookie: admin }));
   const adminTasks = adminState.initiatives.flatMap((p) => p.tasks);
   check('admin still sees task 24', adminTasks.some((t) => t.id === 24));
+  check('admin sees every project, member sees a subset',
+        adminState.initiatives.length > memberState.initiatives.length,
+        `admin ${adminState.initiatives.length} vs member ${memberState.initiatives.length}`);
   check('admin sees more tasks overall than the member does', adminTasks.length > memberTasks.length,
         `admin ${adminTasks.length} vs member ${memberTasks.length}`);
 

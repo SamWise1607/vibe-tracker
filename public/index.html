@@ -103,6 +103,7 @@
   .task-name{color:var(--text);}
   .task-owner{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
   select.task-status{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:4px 7px;border-radius:5px;}
+  select.task-status:disabled{opacity:0.62;cursor:not-allowed;}
   .task-notes{display:flex;flex-direction:column;gap:6px;}
   .task-note-box{display:flex;align-items:flex-start;gap:5px;background:rgba(32,37,47,0.7);border:1px solid var(--border);border-radius:6px;padding:5px 6px;}
   .task-note-box textarea{flex:1;min-width:0;background:transparent;border:none;color:var(--text);font-size:14px;font-family:'Inter',sans-serif;padding:2px 0;resize:none;overflow:hidden;line-height:1.45;}
@@ -416,7 +417,10 @@ async function write(control, request, rollback, after){
 
 function reopen(idx){
   const card = document.querySelectorAll('.card')[idx];
-  if(card) card.classList.add('open');
+  if(card){
+    card.classList.add('open');
+    card.querySelectorAll('[data-task-note-edit]').forEach(growNoteTextarea);
+  }
 }
 
 function statusWeight(s){ if(s==='blocked') return 2; if(s==='at-risk') return 1; return 0; }
@@ -707,15 +711,18 @@ function renderCards(){
           </colgroup>
           <thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Due</th><th>Note</th></tr></thead>
           <tbody>
-            ${(init.tasks || []).map((t,ti)=>`
+            ${(init.tasks || []).map((t,ti)=>{
+              const ownsTask = (t.owners || []).some(o=>o.id === currentUser().id);
+              const statusDisabled = (!admin && !ownsTask) ? 'disabled' : '';
+              return `
               <tr>
                 <td class="task-name">${escapeHtml(t.name)}</td>
                 <td><div class="owners-row">${taskOwnerChips(t, idx, ti)}${admin?`<span class="owner-add"><select class="owner-select" data-add-task-owner-input="${idx}" data-task="${ti}"><option value="">+ owner</option>${taskOwnerAddOptions(t)}</select><button data-add-task-owner-btn="${idx}" data-task="${ti}">Add</button></span>`:''}</div></td>
-                <td><select class="task-status" data-init="${idx}" data-task="${ti}">${taskStatusOptions(t.status)}</select>${admin && (t.owners || []).length ? `<button class="nudge-btn" data-nudge="${idx}" data-task="${ti}">Nudge</button>`:''}${admin ? `<button class="nudge-btn" data-delete-task="${idx}" data-task="${ti}">Delete</button>`:''}<div class="save-note" data-nudge-note="${idx}-${ti}"></div></td>
+                <td><select class="task-status" data-init="${idx}" data-task="${ti}" ${statusDisabled}>${taskStatusOptions(t.status)}</select>${admin && (t.owners || []).length ? `<button class="nudge-btn" data-nudge="${idx}" data-task="${ti}">Nudge</button>`:''}${admin ? `<button class="nudge-btn" data-delete-task="${idx}" data-task="${ti}">Delete</button>`:''}<div class="save-note" data-nudge-note="${idx}-${ti}"></div></td>
                 <td><input type="date" class="task-due" data-init="${idx}" data-task="${ti}" value="${t.due || ''}">${t.due ? daysLeftBadge(t.due) : ''}</td>
                 <td>${taskNotes(t, idx, ti)}</td>
               </tr>
-            `).join('')}
+            `}).join('')}
           </tbody>
         </table>
         <div class="add-task-row" data-add-task-wrap="${idx}">
@@ -743,7 +750,12 @@ function renderCards(){
         <div class="save-note"></div>
       </div>
     `;
-    card.querySelector('.card-head').addEventListener('click', ()=>{ card.classList.toggle('open'); });
+    card.querySelector('.card-head').addEventListener('click', ()=>{
+      card.classList.toggle('open');
+      if(card.classList.contains('open')){
+        card.querySelectorAll('[data-task-note-edit]').forEach(growNoteTextarea);
+      }
+    });
     container.appendChild(card);
   });
   bindCardEvents(container);

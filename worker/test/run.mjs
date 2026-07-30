@@ -3,14 +3,17 @@
  * Run:  npm test        (or: node test/run.mjs)
  */
 
+import { fileURLToPath } from 'node:url';
 import app from '../src/index.js';
 import {
   makeEnv, installFakeEmail, outbox, req, cookieFrom,
   tokenFromLastEmail, check, section, results,
 } from './harness.mjs';
 
-const paths = { schema: new URL('../schema.sql', import.meta.url).pathname,
-                seed:   new URL('../seed.sql',   import.meta.url).pathname };
+// fileURLToPath, not .pathname. On Windows .pathname yields "/C:/Users/..."
+// with a leading slash, which Node then resolves to "C:\C:\Users\...".
+const paths = { schema: fileURLToPath(new URL('../schema.sql', import.meta.url)),
+                seed:   fileURLToPath(new URL('../seed.sql',   import.meta.url)) };
 
 let env;
 const call = (path, opts) => app.fetch(req(path, opts), env);
@@ -258,6 +261,126 @@ section('Permissions: members cannot do admin things');
   // Members can still do normal work
   const task = await call('/api/projects/fortress/tasks', { method: 'POST', cookie: member, body: { name: 'Member task' } });
   check('member can still add a task', task.status === 200);
+}
+
+section('State: task visibility is scoped for members, not for admins');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+  const admin  = await signIn('deoni@visionric.co.za');
+
+  const memberState = await jsonOf(await call('/api/state', { cookie: member }));
+  const memberTasks = memberState.initiatives.flatMap((p) => p.tasks);
+  check('Mia sees at least one task', memberTasks.length > 0);
+  check('every task Mia sees actually has her as an owner',
+        memberTasks.every((t) => (t.owners || []).some((o) => o.id === 'mia')),
+        JSON.stringify(memberTasks.map((t) => t.id)));
+  check('Mia cannot see task 24, which is Stan-only', !memberTasks.some((t) => t.id === 24));
+
+  const adminState = await jsonOf(await call('/api/state', { cookie: admin }));
+  const adminTasks = adminState.initiatives.flatMap((p) => p.tasks);
+  check('admin still sees task 24', adminTasks.some((t) => t.id === 24));
+  check('admin sees more tasks overall than the member does', adminTasks.length > memberTasks.length,
+        `admin ${adminTasks.length} vs member ${memberTasks.length}`);
+
+  check('ferdiDecisions is present for a member too',
+        Array.isArray(memberState.ferdiDecisions) && memberState.ferdiDecisions.length > 0,
+        JSON.stringify(memberState.ferdiDecisions));
+  check('ferdiDecisions items are all actually Ferdi\'s, regardless of viewer',
+        memberState.ferdiDecisions.every((t) => (t.owners || []).some((o) => o.id === 'ferdi')));
+}
+
+section('Permissions: members can only edit tasks they own, and only status/note');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  // Task 23 (mrcn): Mia is a co-owner.
+  const ok = await call('/api/tasks/23', {
+    method: 'PATCH', cookie: member,
+    body: { status: 'in-progress', note: 'moving along', name: 'hacked name' },
+  });
+  check('member can update status/note on her own task', ok.status === 200, `got ${ok.status}`);
+  const row = env._rawDb.prepare('SELECT status, note, name FROM tasks WHERE id=23').get();
+  check('status and note applied', row.status === 'in-progress' && row.note === 'moving along', JSON.stringify(row));
+  check('name field silently ignored for a member', row.name !== 'hacked name', row.name);
+
+  // Task 24 (vib): only Stan owns it.
+  const forbidden = await call('/api/tasks/24', { method: 'PATCH', cookie: member, body: { status: 'blocked' } });
+  check('member gets 403 editing a task she does not own', forbidden.status === 403, `got ${forbidden.status}`);
+
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const adminEdit = await call('/api/tasks/24', { method: 'PATCH', cookie: admin, body: { note: 'admin note' } });
+  check('admin can edit any task regardless of ownership', adminEdit.status === 200, `got ${adminEdit.status}`);
+}
+
+section('Permissions: nudge, delete and reassigning owners are admin-only');
+{
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  const del = await call('/api/tasks/24', { method: 'DELETE', cookie: member });
+  check('member gets 403 deleting a task', del.status === 403, `got ${del.status}`);
+
+  const own = await call('/api/tasks/24/owners', { method: 'PUT', cookie: member, body: { userIds: ['mia'] } });
+  check('member gets 403 reassigning task owners', own.status === 403, `got ${own.status}`);
+
+  const nudge = await call('/api/tasks/23/nudge', { method: 'POST', cookie: member });
+  check('member gets 403 nudging', nudge.status === 403, `got ${nudge.status}`);
+
+  check('task 24 still exists, member could not delete it',
+        !!env._rawDb.prepare('SELECT 1 FROM tasks WHERE id=24').get());
+}
+
+section('Tasks: adding a task assigns a member to themselves only');
+{
+  const member = await signIn('stanford@visionbrokers.co.za');
+  const created = await jsonOf(await call('/api/projects/fortress/tasks', {
+    method: 'POST', cookie: member, body: { name: 'Stan self task', ownerIds: ['mia'] },
+  }));
+  check('task created', created.ok && Number.isInteger(created.id), JSON.stringify(created));
+
+  const owners = env._rawDb.prepare(`SELECT user_id FROM task_owners WHERE task_id=${created.id}`).all().map((r) => r.user_id);
+  check('member cannot assign it to someone else, forced to self',
+        owners.length === 1 && owners[0] === 'stan', JSON.stringify(owners));
+
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const byAdmin = await jsonOf(await call('/api/projects/fortress/tasks', {
+    method: 'POST', cookie: admin, body: { name: 'Admin-assigned task', ownerIds: ['mia', 'stan'] },
+  }));
+  const adminOwners = env._rawDb.prepare(`SELECT user_id FROM task_owners WHERE task_id=${byAdmin.id}`)
+    .all().map((r) => r.user_id).sort();
+  check('admin can assign a new task to whoever they choose', adminOwners.join(',') === 'mia,stan', JSON.stringify(adminOwners));
+}
+
+section('Audit log: task delete captures a snapshot and can be restored');
+{
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  const beforeOwners = env._rawDb.prepare('SELECT user_id FROM task_owners WHERE task_id=24').all().map((r) => r.user_id).sort();
+  const del = await call('/api/tasks/24', { method: 'DELETE', cookie: admin });
+  check('admin can delete a task', del.status === 200, `got ${del.status}`);
+  check('task 24 is actually gone', !env._rawDb.prepare('SELECT 1 FROM tasks WHERE id=24').get());
+
+  const log = await jsonOf(await call('/api/audit', { cookie: admin }));
+  const entry = log.find((l) => l.action === 'task_deleted' && l.entityId === '24');
+  check('deletion shows up in the audit log', !!entry, JSON.stringify(log[0]));
+  check('log entry is marked restorable', entry?.restorable === true);
+
+  const memberView = await call('/api/audit', { cookie: member });
+  check('member gets 403 on the audit log', memberView.status === 403, `got ${memberView.status}`);
+
+  const restore = await jsonOf(await call(`/api/audit/${entry.id}/restore`, { method: 'POST', cookie: admin }));
+  check('restore succeeds', restore.ok === true, JSON.stringify(restore));
+  const restored = env._rawDb.prepare('SELECT * FROM tasks WHERE id=24').get();
+  check('task 24 exists again with its original name',
+        restored?.name === 'Timebox modify-vs-rebuild test on weakest page (2-3hrs)', JSON.stringify(restored));
+  const restoredOwners = env._rawDb.prepare('SELECT user_id FROM task_owners WHERE task_id=24').all().map((r) => r.user_id).sort();
+  check('owners restored too', restoredOwners.join(',') === beforeOwners.join(','), JSON.stringify(restoredOwners));
+
+  const again = await call(`/api/audit/${entry.id}/restore`, { method: 'POST', cookie: admin });
+  check('restoring the same entry twice is rejected', again.status === 400, `got ${again.status}`);
+
+  const memberRestore = await call(`/api/audit/${entry.id}/restore`, { method: 'POST', cookie: member });
+  check('member gets 403 trying to restore', memberRestore.status === 403, `got ${memberRestore.status}`);
 }
 
 section('Admin: approving and rejecting people');

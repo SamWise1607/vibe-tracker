@@ -2,21 +2,40 @@ name = "vibe-tracker"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
-# Serves the frontend from ../public and falls through to the Worker for /api/*
+# Serve on vibe-tracker.visionbrokers.workers.dev
+workers_dev = true
+
+# Off deliberately. Preview URLs give every deployed version its own public
+# address. They would serve the whole app, and because magic links are built
+# from APP_URL, a login started on a preview URL lands you on the main one,
+# which is confusing. Fewer public front doors is also simply better.
+preview_urls = false
+
 [assets]
 directory = "../public"
 binding = "ASSETS"
+
+# Any path that is not a real file returns index.html, so the dashboard works
+# whatever URL someone lands on (including the #fortress anchors in emails).
 not_found_handling = "single-page-application"
 
+# Without this, Cloudflare serves assets FIRST and never runs the Worker for
+# paths that do not match a file. Every /api/ call would silently return the
+# HTML page instead of JSON. This tells Cloudflare that /api/* is the Worker's
+# job, and leaves everything else as asset-first.
+run_worker_first = ["/api/*"]
+
 [[d1_databases]]
+# Cloudflare's create command suggests binding = "vibe_tracker". Do not use that.
+# The code refers to the database as env.DB, so this name must stay "DB".
 binding = "DB"
 database_name = "vibe-tracker"
-database_id = "PASTE_YOUR_DATABASE_ID_HERE"   # printed by: wrangler d1 create vibe-tracker
+database_id = "62d4d215-4e76-4400-809f-c97746f2c2e3"
 
 [vars]
 # Public, safe to commit. Must exactly match the deployed URL, no trailing slash,
-# because magic links are built from it.
-APP_URL = "https://vibe-tracker.YOUR-SUBDOMAIN.workers.dev"
+# because every magic link in every email is built from it.
+APP_URL = "https://vibe-tracker.visionbrokers.workers.dev"
 
 # ---------------------------------------------------------------------------
 # Secrets. NEVER put these here. Set them with:

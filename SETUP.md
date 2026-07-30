@@ -80,7 +80,14 @@ mailbox instead of sending as a domain, so there is nothing to verify.
    One template covers all four email types (login link, added to project, task
    assigned, nudge). The free plan allows two, so there is one spare.
 
-4. **Get both keys.** Account, then General.
+4. **Switch on server-side sending.** Account, then **Security**. Turn on
+   **"Allow EmailJS API for non-browser applications"**.
+
+   This is off by default and it is not optional. The Worker is not a browser, so
+   without this every send is refused. If emails silently fail later, check this
+   first.
+
+5. **Get both keys.** Account, then General.
    Copy the **Public Key** and the **Private Key**.
 
    The private key is the one that matters. It is what lets the Worker send

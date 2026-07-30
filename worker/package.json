@@ -13,10 +13,23 @@
     "db:schema:local": "wrangler d1 execute vibe-tracker --file=./schema.sql --local",
     "db:seed:local": "wrangler d1 execute vibe-tracker --file=./seed.sql --local"
   },
+  "// allowScripts": [
+    "npm 12 blocks package install scripts by default to limit supply-chain risk.",
+    "These three need theirs to work, and all three are build tooling, not app code:",
+    "  workerd  - the Cloudflare Workers runtime binary, downloads the right build for your OS",
+    "  esbuild  - the bundler wrangler uses, downloads its platform binary",
+    "  sharp    - image library pulled in by wrangler, needs a native binary",
+    "None of these end up in the deployed Worker. Only src/*.js and hono do."
+  ],
+  "allowScripts": {
+    "workerd": true,
+    "esbuild": true,
+    "sharp": true
+  },
   "dependencies": {
     "hono": "^4.6.0"
   },
   "devDependencies": {
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.114.0"
   }
 }

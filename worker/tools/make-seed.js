@@ -1,6 +1,26 @@
-const fs = require('fs');
+/**
+ * Regenerates seed.sql from the original draft HTML.
+ *
+ * You only need this if the draft's project data changes and you want to reload
+ * the database from scratch. Day to day, edits happen inside the app.
+ *
+ * Run from the worker folder:  node tools/make-seed.js
+ */
 
-const html = fs.readFileSync('/sessions/sweet-dreamy-curie/mnt/uploads/vibe_dashboardDRAFT.html','utf8');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT  = path.resolve(__dirname, '..', '..');   // vibe-tracker/
+const DRAFT = path.join(ROOT, '.reference', 'vibe_dashboardDRAFT.ORIGINAL.html');
+const OUT   = path.join(ROOT, 'worker', 'seed.sql');
+
+if (!fs.existsSync(DRAFT)) {
+  console.error(`Cannot find the draft at:\n  ${DRAFT}\n`);
+  console.error('That file is the source of the seed data. Restore it before running this.');
+  process.exit(1);
+}
+
+const html = fs.readFileSync(DRAFT, 'utf8');
 
 // Pull the seedData object literal out of the <script> block.
 const start = html.indexOf('const seedData = ');
@@ -82,10 +102,10 @@ for (const p of seedData.initiatives){
   out.push('');
 }
 
-fs.writeFileSync('/sessions/sweet-dreamy-curie/mnt/vibe-project-management/vibe-tracker/worker/seed.sql', out.join('\n'));
+fs.writeFileSync(OUT, out.join('\n'));
 
-console.log('projects:', seedData.initiatives.length);
-console.log('tasks   :', taskId);
-console.log('users   :', users.length);
-console.log('lines   :', out.length);
+console.log(`wrote ${path.relative(process.cwd(), OUT)}`);
+console.log('  projects:', seedData.initiatives.length);
+console.log('  tasks   :', taskId);
+console.log('  users   :', users.length);
 if (warn.length){ console.log('\nWARNINGS:'); warn.forEach(w => console.log('  -', w)); }

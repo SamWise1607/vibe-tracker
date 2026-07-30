@@ -1,6 +1,7 @@
 -- VIBE Operations Tracker: D1 schema
 -- Run with: npx wrangler d1 execute vibe-tracker --file=./schema.sql --remote
 
+DROP TABLE IF EXISTS audit_log;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS magic_tokens;
 DROP TABLE IF EXISTS nudges;
@@ -142,3 +143,22 @@ CREATE TABLE settings (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by TEXT REFERENCES users(id)
 );
+
+-- ---------------------------------------------------------------
+-- Audit log: so admins can see what other admins changed, and undo
+-- an accidental task delete. Only reversible actions (task_deleted)
+-- carry a snapshot; everything else is a plain-English record.
+-- ---------------------------------------------------------------
+CREATE TABLE audit_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id    TEXT NOT NULL REFERENCES users(id),
+  action      TEXT NOT NULL,   -- e.g. task_created, task_deleted, task_status_changed
+  entity_type TEXT NOT NULL,   -- 'task' | 'project' | 'settings' | 'user'
+  entity_id   TEXT,
+  snapshot    TEXT,            -- JSON, only set when the action is reversible
+  detail      TEXT,            -- plain-English summary shown in the log
+  restored_at TEXT,            -- set once a task_deleted entry has been restored
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_audit_log_created ON audit_log(created_at DESC, id DESC);

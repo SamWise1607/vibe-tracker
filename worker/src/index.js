@@ -56,6 +56,25 @@ async function getUser(env, id) {
     .bind(id).first();
 }
 
+/**
+ * Records an admin-visible history entry. Never throws into the caller,
+ * same philosophy as email sending: logging a thing going wrong should
+ * never be the reason the real action fails.
+ */
+async function logAction(env, { actorId, action, entityType, entityId, snapshot, detail }) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO audit_log (actor_id, action, entity_type, entity_id, snapshot, detail)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
+    ).bind(
+      actorId, action, entityType, entityId == null ? null : String(entityId),
+      snapshot ? JSON.stringify(snapshot) : null, detail || null,
+    ).run();
+  } catch (e) {
+    console.error('audit log failed', e);
+  }
+}
+
 // ===========================================================================
 // AUTH
 // ===========================================================================
@@ -159,10 +178,13 @@ app.get('/api/state', requireAuth, async (c) => {
                  ORDER BY p.updated_at DESC LIMIT 1`).first(),
   ]);
 
+  const me = c.get('user');
+  const isAdmin = me.role === 'admin';
+
   const ownersByProject = groupBy(projOwners.results, 'project_id', (r) => ({ id: r.id, name: r.name }));
   const risksByProject  = groupBy(risks.results, 'project_id', (r) => r.body);
   const ownersByTask    = groupBy(taskOwners.results, 'task_id', (r) => ({ id: r.id, name: r.name }));
-  const tasksByProject  = groupBy(tasks.results, 'project_id', (t) => ({
+  const allTasksByProject = groupBy(tasks.results, 'project_id', (t) => ({
     id: t.id,
     name: t.name,
     status: t.status,
@@ -172,12 +194,34 @@ app.get('/api/state', requireAuth, async (c) => {
     ownerLabel: t.owner_label,          // 'Legal', 'External (Discovery)', 'Unassigned'
   }));
 
+  // Members only see tasks they are personally an owner of. Everything else
+  // on a project (summary, status, Key Risk, target date) stays visible to
+  // everyone, this scoping applies to the per-project task list only.
+  const tasksByProject = isAdmin ? allTasksByProject : Object.fromEntries(
+    Object.entries(allTasksByProject).map(([projectId, projectTasks]) => [
+      projectId,
+      projectTasks.filter((t) => (t.owners || []).some((o) => o.id === me.id)),
+    ])
+  );
+
+  // "Decisions Needed from Ferdi" is a team-wide status signal, not private
+  // task data, so it is always built from the full unfiltered set, even for
+  // members who cannot otherwise see Ferdi's tasks. Mirrors the existing
+  // client-side convention of hardcoding the 'ferdi' user id.
+  const ferdiDecisions = Object.entries(allTasksByProject).flatMap(([projectId, projectTasks]) => {
+    const project = projects.results.find((p) => p.id === projectId);
+    return projectTasks
+      .filter((t) => (t.owners || []).some((o) => o.id === 'ferdi'))
+      .map((t) => ({ ...t, projectId, projectName: project?.name || projectId }));
+  });
+
   const settingsMap = Object.fromEntries(settings.results.map((s) => [s.key, s.value]));
 
   return json(c, {
-    me: c.get('user'),
+    me,
     focusThisWeek: settingsMap.focus_this_week || '',
     leaderNotes: safeParse(settingsMap.leadership_notes, []),
+    ferdiDecisions,
     lastEdited: { by: lastEdit?.by_name || '—', at: (lastEdit?.at || '').slice(0, 10) || '—' },
     initiatives: projects.results.map((p) => ({
       id: p.id,
@@ -232,6 +276,10 @@ app.patch('/api/projects/:id', requireAuth, async (c) => {
   vals.push(nowIso(), c.get('user').id, id);
 
   await c.env.DB.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  await logAction(c.env, {
+    actorId: c.get('user').id, action: 'project_updated', entityType: 'project', entityId: id,
+    detail: `${id}: ${Object.keys(body).join(', ')} updated`,
+  });
   return json(c, { ok: true });
 });
 
@@ -250,6 +298,10 @@ app.put('/api/projects/:id/risks', requireAuth, requireAdmin, async (c) => {
 
   await c.env.DB.batch(stmts);
   await touchProject(c.env, id, c.get('user').id);
+  await logAction(c.env, {
+    actorId: c.get('user').id, action: 'key_risk_updated', entityType: 'project', entityId: id,
+    detail: `${id}: Key Risk updated (${risks.length} item${risks.length === 1 ? '' : 's'})`,
+  });
   return json(c, { ok: true });
 });
 
@@ -282,14 +334,27 @@ app.post('/api/projects/:id/owners', requireAuth, async (c) => {
     const res = await sendEmail(c.env, addedToProjectEmail(target, project, actor, `${c.env.APP_URL}/#${projectId}`));
     emailed = res.ok;
   }
+  await logAction(c.env, {
+    actorId: actor.id, action: 'project_owner_added', entityType: 'project', entityId: projectId,
+    detail: `${target.name} added to ${projectId}`,
+  });
   return json(c, { ok: true, emailed });
 });
 
 app.delete('/api/projects/:id/owners/:userId', requireAuth, async (c) => {
+  const projectId = c.req.param('id');
+  const userId = c.req.param('userId');
+  const actor = c.get('user');
+  const target = await getUser(c.env, userId);
+
   await c.env.DB.prepare(
     `DELETE FROM project_owners WHERE project_id = ?1 AND user_id = ?2`
-  ).bind(c.req.param('id'), c.req.param('userId')).run();
-  await touchProject(c.env, c.req.param('id'), c.get('user').id);
+  ).bind(projectId, userId).run();
+  await touchProject(c.env, projectId, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'project_owner_removed', entityType: 'project', entityId: projectId,
+    detail: `${target?.name || userId} removed from ${projectId}`,
+  });
   return json(c, { ok: true });
 });
 
@@ -299,30 +364,66 @@ app.delete('/api/projects/:id/owners/:userId', requireAuth, async (c) => {
 
 app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   const projectId = c.req.param('id');
-  const { name } = await c.req.json().catch(() => ({}));
+  const actor = c.get('user');
+  const { name, due, note, ownerIds } = await c.req.json().catch(() => ({}));
   if (!String(name || '').trim()) return json(c, { error: 'Task needs a name' }, 400);
+
+  // Members can only ever create a task assigned to themselves. Admins get
+  // to pick, matching the owner field their version of the form shows.
+  const owners = actor.role === 'admin'
+    ? [...new Set(Array.isArray(ownerIds) ? ownerIds : [])]
+    : [actor.id];
 
   const max = await c.env.DB.prepare(
     `SELECT COALESCE(MAX(sort_order), -1) AS m FROM tasks WHERE project_id = ?1`
   ).bind(projectId).first();
 
   const res = await c.env.DB.prepare(
-    `INSERT INTO tasks (project_id, name, status, sort_order, updated_at, updated_by)
-     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5)`
-  ).bind(projectId, String(name).trim(), max.m + 1, nowIso(), c.get('user').id).run();
+    `INSERT INTO tasks (project_id, name, status, due_date, note, sort_order, updated_at, updated_by)
+     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5, ?6, ?7)`
+  ).bind(
+    projectId, String(name).trim(), String(due || '').trim() || null, String(note || '').trim(),
+    max.m + 1, nowIso(), actor.id,
+  ).run();
 
-  await touchProject(c.env, projectId, c.get('user').id);
-  return json(c, { ok: true, id: res.meta.last_row_id });
+  const taskId = res.meta.last_row_id;
+  if (owners.length) {
+    await c.env.DB.batch(owners.map((uid) =>
+      c.env.DB.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?1, ?2)`).bind(taskId, uid)
+    ));
+  }
+
+  await touchProject(c.env, projectId, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_created', entityType: 'task', entityId: taskId,
+    detail: `"${String(name).trim()}" added to ${projectId}`,
+  });
+  return json(c, { ok: true, id: taskId });
 });
 
 const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', note: 'note', ownerLabel: 'owner_label' };
+// Members can only ever touch status and note on a task, and only one they
+// own. Everything else (name, due date, non-person label) is admin-only.
+const MEMBER_TASK_FIELDS = { status: 'status', note: 'note' };
 
 app.patch('/api/tasks/:id', requireAuth, async (c) => {
   const id = Number(c.req.param('id'));
+  const actor = c.get('user');
   const body = await c.req.json().catch(() => ({}));
 
+  const task = await c.env.DB.prepare(`SELECT * FROM tasks WHERE id = ?1`).bind(id).first();
+  if (!task) return json(c, { error: 'No such task' }, 404);
+
+  if (actor.role !== 'admin') {
+    const owns = await c.env.DB.prepare(
+      `SELECT 1 FROM task_owners WHERE task_id = ?1 AND user_id = ?2`
+    ).bind(id, actor.id).first();
+    if (!owns) return json(c, { error: 'You can only edit tasks assigned to you' }, 403);
+  }
+
+  const fields = actor.role === 'admin' ? TASK_FIELDS : MEMBER_TASK_FIELDS;
   const sets = [], vals = [];
-  for (const [key, column] of Object.entries(TASK_FIELDS)) {
+  for (const [key, column] of Object.entries(fields)) {
     if (key in body) {
       sets.push(`${column} = ?`);
       vals.push(body[key] === '' && (key === 'due' || key === 'ownerLabel') ? null : body[key]);
@@ -331,17 +432,37 @@ app.patch('/api/tasks/:id', requireAuth, async (c) => {
   if (!sets.length) return json(c, { error: 'Nothing to update' }, 400);
 
   sets.push('updated_at = ?', 'updated_by = ?');
-  vals.push(nowIso(), c.get('user').id, id);
+  vals.push(nowIso(), actor.id, id);
 
   await c.env.DB.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  await touchProject(c.env, task.project_id, actor.id);
 
-  const task = await c.env.DB.prepare(`SELECT project_id FROM tasks WHERE id = ?1`).bind(id).first();
-  if (task) await touchProject(c.env, task.project_id, c.get('user').id);
+  if ('status' in body && body.status !== task.status) {
+    await logAction(c.env, {
+      actorId: actor.id, action: 'task_status_changed', entityType: 'task', entityId: id,
+      detail: `"${task.name}": ${task.status} -> ${body.status}`,
+    });
+  }
   return json(c, { ok: true });
 });
 
-app.delete('/api/tasks/:id', requireAuth, async (c) => {
-  await c.env.DB.prepare(`DELETE FROM tasks WHERE id = ?1`).bind(Number(c.req.param('id'))).run();
+/** Admin-only: deleting captures a full snapshot first, so it can be undone
+ * from the Activity Log if it turns out to be a mistake. */
+app.delete('/api/tasks/:id', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  const actor = c.get('user');
+
+  const task = await c.env.DB.prepare(`SELECT * FROM tasks WHERE id = ?1`).bind(id).first();
+  if (!task) return json(c, { error: 'No such task' }, 404);
+  const owners = await c.env.DB.prepare(`SELECT user_id FROM task_owners WHERE task_id = ?1`).bind(id).all();
+
+  await c.env.DB.prepare(`DELETE FROM tasks WHERE id = ?1`).bind(id).run();
+
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_deleted', entityType: 'task', entityId: id,
+    snapshot: { ...task, ownerIds: owners.results.map((r) => r.user_id) },
+    detail: `"${task.name}" deleted from ${task.project_id}`,
+  });
   return json(c, { ok: true });
 });
 
@@ -350,7 +471,7 @@ app.delete('/api/tasks/:id', requireAuth, async (c) => {
  * `label` covers non-people such as 'Legal' or 'External (Discovery)', who
  * obviously cannot be emailed or nudged.
  */
-app.put('/api/tasks/:id/owners', requireAuth, async (c) => {
+app.put('/api/tasks/:id/owners', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   const { userIds = [], label = null } = await c.req.json().catch(() => ({}));
   const actor = c.get('user');
@@ -380,6 +501,10 @@ app.put('/api/tasks/:id/owners', requireAuth, async (c) => {
     const res = await sendEmail(c.env, addedToTaskEmail(target, task, project, actor, `${c.env.APP_URL}/#${project.id}`));
     if (res.ok) notified.push(target.name);
   }
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_owners_changed', entityType: 'task', entityId: id,
+    detail: `"${task.name}" owners set to [${userIds.join(', ') || 'none'}]${label ? ` (label: ${label})` : ''}`,
+  });
   return json(c, { ok: true, notified });
 });
 
@@ -389,7 +514,7 @@ app.put('/api/tasks/:id/owners', requireAuth, async (c) => {
  * Rate limited per person per task, for two reasons: it stops the button being
  * used as a stick, and it protects the EmailJS free allowance of 200/month.
  */
-app.post('/api/tasks/:id/nudge', requireAuth, async (c) => {
+app.post('/api/tasks/:id/nudge', requireAuth, requireAdmin, async (c) => {
   const id = Number(c.req.param('id'));
   const actor = c.get('user');
 
@@ -447,6 +572,10 @@ async function putSetting(env, key, value, userId) {
 app.put('/api/settings/focus', requireAuth, requireAdmin, async (c) => {
   const { value } = await c.req.json().catch(() => ({}));
   await putSetting(c.env, 'focus_this_week', String(value || '').trim(), c.get('user').id);
+  await logAction(c.env, {
+    actorId: c.get('user').id, action: 'focus_updated', entityType: 'settings', entityId: 'focus_this_week',
+    detail: `This Week's focus set to: ${String(value || '').trim() || '(cleared)'}`,
+  });
   return json(c, { ok: true });
 });
 
@@ -455,6 +584,10 @@ app.put('/api/settings/leadership', requireAuth, requireAdmin, async (c) => {
   if (!Array.isArray(notes)) return json(c, { error: 'notes must be an array' }, 400);
   const clean = notes.map((n) => String(n).trim()).filter(Boolean);
   await putSetting(c.env, 'leadership_notes', JSON.stringify(clean), c.get('user').id);
+  await logAction(c.env, {
+    actorId: c.get('user').id, action: 'leadership_updated', entityType: 'settings', entityId: 'leadership_notes',
+    detail: `Leadership Flags updated (${clean.length} item${clean.length === 1 ? '' : 's'})`,
+  });
   return json(c, { ok: true });
 });
 
@@ -474,12 +607,19 @@ app.post('/api/users/:id/approve', requireAuth, requireAdmin, async (c) => {
 
   const url = await createMagicLink(c.env, id);
   const res = await sendEmail(c.env, approvedEmail(target, actor, url));
+  await logAction(c.env, {
+    actorId: actor.id, action: 'user_approved', entityType: 'user', entityId: id,
+    detail: `${target.name} (${target.email}) approved`,
+  });
   return json(c, { ok: true, emailed: res.ok });
 });
 
 app.post('/api/users/:id/reject', requireAuth, requireAdmin, async (c) => {
   const id = c.req.param('id');
-  if (id === c.get('user').id) return json(c, { error: 'You cannot reject yourself' }, 400);
+  const actor = c.get('user');
+  if (id === actor.id) return json(c, { error: 'You cannot reject yourself' }, 400);
+
+  const target = await getUser(c.env, id);
 
   // Rejecting also kills any live session immediately.
   await c.env.DB.batch([
@@ -488,24 +628,97 @@ app.post('/api/users/:id/reject', requireAuth, requireAdmin, async (c) => {
     c.env.DB.prepare(`DELETE FROM magic_tokens WHERE user_id = ?1`).bind(id),
   ]);
   // No email. Telling someone they were rejected invites an argument.
+  await logAction(c.env, {
+    actorId: actor.id, action: 'user_rejected', entityType: 'user', entityId: id,
+    detail: `${target?.name || id} (${target?.email || 'unknown'}) rejected`,
+  });
   return json(c, { ok: true });
 });
 
 app.patch('/api/users/:id', requireAuth, requireAdmin, async (c) => {
   const id = c.req.param('id');
+  const actor = c.get('user');
   const { role } = await c.req.json().catch(() => ({}));
   if (!['admin', 'member'].includes(role)) return json(c, { error: 'role must be admin or member' }, 400);
 
   // Guard against locking everyone out of admin.
-  if (role === 'member' && id === c.get('user').id) {
+  if (role === 'member' && id === actor.id) {
     const count = await c.env.DB.prepare(
       `SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'`
     ).first();
     if (count.n <= 1) return json(c, { error: 'You are the last admin' }, 400);
   }
 
+  const target = await getUser(c.env, id);
   await c.env.DB.prepare(`UPDATE users SET role = ?1 WHERE id = ?2`).bind(role, id).run();
+  await logAction(c.env, {
+    actorId: actor.id, action: 'user_role_changed', entityType: 'user', entityId: id,
+    detail: `${target?.name || id} role changed from ${target?.role || '?'} to ${role}`,
+  });
   return json(c, { ok: true });
+});
+
+// ===========================================================================
+// AUDIT LOG (admin only)
+// ===========================================================================
+
+app.get('/api/audit', requireAuth, requireAdmin, async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT a.id, a.action, a.entity_type, a.entity_id, a.detail, a.created_at, a.restored_at,
+            u.name AS actor_name
+       FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 200`
+  ).all();
+  return json(c, rows.results.map((r) => ({
+    id: r.id,
+    action: r.action,
+    entityType: r.entity_type,
+    entityId: r.entity_id,
+    detail: r.detail,
+    at: r.created_at,
+    actor: r.actor_name || r.actor_id,
+    restorable: r.action === 'task_deleted' && !r.restored_at,
+    restoredAt: r.restored_at,
+  })));
+});
+
+/** Brings a deleted task back to life from its logged snapshot. */
+app.post('/api/audit/:id/restore', requireAuth, requireAdmin, async (c) => {
+  const id = Number(c.req.param('id'));
+  const actor = c.get('user');
+
+  const entry = await c.env.DB.prepare(`SELECT * FROM audit_log WHERE id = ?1`).bind(id).first();
+  if (!entry) return json(c, { error: 'No such log entry' }, 404);
+  if (entry.action !== 'task_deleted') return json(c, { error: 'Only a deleted task can be restored' }, 400);
+  if (entry.restored_at) return json(c, { error: 'Already restored' }, 400);
+
+  const snap = safeParse(entry.snapshot, null);
+  if (!snap) return json(c, { error: 'Nothing to restore, no snapshot was saved' }, 400);
+
+  const existing = await c.env.DB.prepare(`SELECT 1 FROM projects WHERE id = ?1`).bind(snap.project_id).first();
+  if (!existing) return json(c, { error: 'The project this task belonged to no longer exists' }, 400);
+
+  await c.env.DB.prepare(
+    `INSERT INTO tasks (id, project_id, name, status, due_date, note, owner_label, sort_order, updated_at, updated_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`
+  ).bind(
+    snap.id, snap.project_id, snap.name, snap.status, snap.due_date,
+    snap.note, snap.owner_label, snap.sort_order, nowIso(), actor.id,
+  ).run();
+
+  if (Array.isArray(snap.ownerIds) && snap.ownerIds.length) {
+    await c.env.DB.batch(snap.ownerIds.map((uid) =>
+      c.env.DB.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?1, ?2)`).bind(snap.id, uid)
+    ));
+  }
+
+  await c.env.DB.prepare(`UPDATE audit_log SET restored_at = ?1 WHERE id = ?2`).bind(nowIso(), id).run();
+  await touchProject(c.env, snap.project_id, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'task_restored', entityType: 'task', entityId: snap.id,
+    detail: `"${snap.name}" restored from the Activity Log`,
+  });
+  return json(c, { ok: true, id: snap.id });
 });
 
 // ---------------------------------------------------------------------------

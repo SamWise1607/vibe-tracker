@@ -37,6 +37,11 @@ database_id = "62d4d215-4e76-4400-809f-c97746f2c2e3"
 # because every magic link in every email is built from it.
 APP_URL = "https://vibe-tracker.visionbrokers.workers.dev"
 
+[triggers]
+# Daily due-date reminder check (runDueDateReminders in src/index.js).
+# 04:00 UTC = 06:00 SAST (South Africa doesn't observe DST, so this stays correct year-round).
+crons = ["0 4 * * *"]
+
 # ---------------------------------------------------------------------------
 # Secrets. NEVER put these here. Set them with:
 #   npx wrangler secret put EMAILJS_SERVICE_ID

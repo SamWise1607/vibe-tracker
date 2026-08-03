@@ -23,11 +23,20 @@ CREATE TABLE users (
   email       TEXT NOT NULL UNIQUE,
   role        TEXT NOT NULL DEFAULT 'member'   CHECK (role   IN ('admin','member')),
   status      TEXT NOT NULL DEFAULT 'pending'  CHECK (status IN ('active','pending','rejected')),
+  -- Never logs in, never appears in /api/users or any admin/owner picker.
+  -- Exists only so automated due-date reminders have a real users.id to put
+  -- in nudges.sent_by (that column is NOT NULL) and a name/email to show as
+  -- the sender instead of misattributing the email to a real person.
+  is_system   INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX idx_users_email  ON users(email);
 CREATE INDEX idx_users_status ON users(status);
+
+-- System user for automated due-date reminder emails. See is_system comment above.
+INSERT INTO users (id, name, email, role, status, is_system)
+VALUES ('system', 'VIBE Tracker', 'system@vibe-tracker.local', 'member', 'active', 1);
 
 -- ---------------------------------------------------------------
 -- Projects

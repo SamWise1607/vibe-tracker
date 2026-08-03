@@ -15,12 +15,19 @@ import {
 } from './auth.js';
 import {
   sendEmail, magicLinkEmail, addedToProjectEmail, addedToTaskEmail,
-  nudgeEmail, joinRequestEmail, approvedEmail,
+  nudgeEmail, dueDateReminderEmail, joinRequestEmail, approvedEmail,
 } from './email.js';
 
 const app = new Hono();
 
 const NUDGE_COOLDOWN_HOURS = 24;
+
+// Automatic due-date reminders piggyback on the same nudges table and the
+// same 24h cooldown as a manual Nudge (task_id + sent_to, regardless of who
+// sent it), so a manual Nudge in the last 24h blocks an automatic reminder
+// and vice versa, with no extra dedup logic needed.
+const DUE_REMINDER_LEAD_DAYS = 7;
+const SYSTEM_USER_ID = 'system';
 
 function nowIso() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -189,7 +196,10 @@ app.get('/api/state', requireAuth, async (c) => {
     db.prepare(`SELECT * FROM tasks ORDER BY project_id, sort_order, id`).all(),
     db.prepare(`SELECT t.task_id, u.id, u.name FROM task_owners t
                   JOIN users u ON u.id = t.user_id ORDER BY u.name`).all(),
-    db.prepare(`SELECT id, task_id, body FROM task_notes ORDER BY task_id, sort_order, id`).all(),
+    // DESC: newest note first. Notes are still stored/inserted with an
+    // ever-increasing sort_order (append-only), just displayed in reverse so
+    // a newly added note folds in above older ones instead of at the bottom.
+    db.prepare(`SELECT id, task_id, body FROM task_notes ORDER BY task_id, sort_order DESC, id DESC`).all(),
     db.prepare(`SELECT key, value FROM settings`).all(),
     db.prepare(`SELECT u.name AS by_name, p.updated_at AS at FROM projects p
                   LEFT JOIN users u ON u.id = p.updated_by
@@ -215,6 +225,24 @@ app.get('/api/state', requireAuth, async (c) => {
     owners: ownersByTask[t.id] || [],
     ownerLabel: t.owner_label,          // 'Legal', 'External (Discovery)', 'Unassigned'
   }));
+
+  // Task numbers like "1.1", "3.4": project.num + the task's 1-based rank
+  // among the NOT-done tasks in that project, ordered by sort_order (the
+  // `tasks` query above is already `ORDER BY project_id, sort_order, id`,
+  // so groupBy already produced each project's array in that order).
+  // Deliberately not stored anywhere: it's recomputed here on every read, so
+  // dragging tasks to reorder (PUT /api/projects/:id/tasks/reorder) just
+  // works with no separate renumbering step, and a done task shows no
+  // number at all rather than a stale or out-of-sequence one (Sam's call:
+  // once it's done, the number "can come off, it doesn't matter anymore").
+  for (const [projectId, projectTasks] of Object.entries(allTasksByProject)) {
+    const project = projects.results.find((p) => p.id === projectId);
+    if (!project) continue;
+    let rank = 0;
+    for (const t of projectTasks) {
+      t.number = t.status === 'done' ? null : `${project.num}.${++rank}`;
+    }
+  }
 
   // Members see a project at all if they are either a named project owner
   // (the project_owners list shown as chips on the card) OR own at least
@@ -275,9 +303,12 @@ app.get('/api/users', requireAuth, async (c) => {
   const isAdmin = c.get('user').role === 'admin';
   // Members get the roster so they can assign owners. They do not get to see
   // pending or rejected people, which is admin business.
+  // is_system = 0 excludes the 'VIBE Tracker' automated-reminder sender, which
+  // is a real users row (nudges.sent_by needs one) but should never show up
+  // as a pickable owner or in the admin user-management list.
   const sql = isAdmin
-    ? `SELECT id, name, email, role, status, created_at FROM users ORDER BY status, name`
-    : `SELECT id, name, email, role, status FROM users WHERE status = 'active' ORDER BY name`;
+    ? `SELECT id, name, email, role, status, created_at FROM users WHERE is_system = 0 ORDER BY status, name`
+    : `SELECT id, name, email, role, status FROM users WHERE status = 'active' AND is_system = 0 ORDER BY name`;
   const rows = await c.env.DB.prepare(sql).all();
   return json(c, rows.results);
 });
@@ -508,6 +539,45 @@ app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   return json(c, { ok: true, id: taskId });
 });
 
+/**
+ * Drag-to-reorder. Admin-only, one project at a time. Body is the full list
+ * of that project's task ids in the new order; sort_order is rewritten to
+ * 0..n-1 to match. Rejects anything that isn't exactly a reordering of the
+ * project's existing tasks (no sneaking a task in from another project, no
+ * dropping one), so this can never be used to corrupt task_id/project_id
+ * pairing.
+ *
+ * Task numbers ("1.1", "3.4") are NOT stored anywhere, see the comment above
+ * allTasksByProject in GET /api/state; they're recomputed from this same
+ * sort_order every time the state is read, so reordering here is all that's
+ * needed to renumber.
+ */
+app.put('/api/projects/:id/tasks/reorder', requireAuth, requireAdmin, async (c) => {
+  const projectId = c.req.param('id');
+  const actor = c.get('user');
+  const { taskIds } = await c.req.json().catch(() => ({}));
+
+  if (!Array.isArray(taskIds) || !taskIds.length) return json(c, { error: 'taskIds must be a non-empty array' }, 400);
+
+  const existing = await c.env.DB.prepare(`SELECT id FROM tasks WHERE project_id = ?1`).bind(projectId).all();
+  const existingIds = existing.results.map((r) => r.id);
+  const sameSet = existingIds.length === taskIds.length &&
+    new Set(existingIds).size === new Set(taskIds.map(Number)).size &&
+    existingIds.every((id) => taskIds.map(Number).includes(id));
+  if (!sameSet) return json(c, { error: 'taskIds must be exactly this project\'s current tasks, reordered' }, 400);
+
+  await c.env.DB.batch(taskIds.map((id, i) =>
+    c.env.DB.prepare(`UPDATE tasks SET sort_order = ?1 WHERE id = ?2 AND project_id = ?3`).bind(i, Number(id), projectId)
+  ));
+
+  await touchProject(c.env, projectId, actor.id);
+  await logAction(c.env, {
+    actorId: actor.id, action: 'tasks_reordered', entityType: 'project', entityId: projectId,
+    detail: `Tasks reordered in ${projectId}`,
+  });
+  return json(c, { ok: true });
+});
+
 const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', ownerLabel: 'owner_label' };
 // Members can only ever touch status on a task, and only one they own.
 // Notes are a separate free-for-all (see TASK NOTES below); everything else
@@ -703,6 +773,39 @@ app.put('/api/tasks/:id/owners', requireAuth, requireAdmin, async (c) => {
 });
 
 /**
+ * Shared by the manual Nudge button and the automatic due-date reminders:
+ * checks the same per-person-per-task cooldown, sends via the same
+ * sendEmail(), and records to the same `nudges` table either way. That
+ * shared table + cutoff check is what makes a manual Nudge and an automatic
+ * reminder dedupe against each other for free.
+ *
+ * @param {object} env
+ * @param {object} opts
+ * @param {object} opts.task
+ * @param {object} opts.owner        {id, name, email}
+ * @param {string} opts.sentById     users.id to record as the sender
+ * @param {(url: string) => object} opts.buildMessage  returns a sendEmail() message
+ * @returns {Promise<{sent: boolean, reason: 'cooldown'|'failed'|null}>}
+ */
+async function sendNudgeIfDue(env, { task, owner, sentById, buildMessage }) {
+  const cutoff = new Date(Date.now() - NUDGE_COOLDOWN_HOURS * 3600 * 1000)
+    .toISOString().replace('T', ' ').slice(0, 19);
+
+  const recent = await env.DB.prepare(
+    `SELECT sent_at FROM nudges WHERE task_id = ?1 AND sent_to = ?2 AND sent_at > ?3 LIMIT 1`
+  ).bind(task.id, owner.id, cutoff).first();
+  if (recent) return { sent: false, reason: 'cooldown' };
+
+  const res = await sendEmail(env, buildMessage(`${env.APP_URL}/#${task.project_id}`));
+  if (!res.ok) return { sent: false, reason: 'failed' };
+
+  await env.DB.prepare(
+    `INSERT INTO nudges (task_id, sent_by, sent_to) VALUES (?1, ?2, ?3)`
+  ).bind(task.id, sentById, owner.id).run();
+  return { sent: true, reason: null };
+}
+
+/**
  * The nudge button. Emails every human owner of a task asking for an update.
  *
  * Rate limited per person per task, for two reasons: it stops the button being
@@ -727,30 +830,63 @@ app.post('/api/tasks/:id/nudge', requireAuth, requireAdmin, async (c) => {
     return json(c, { error: `This task is assigned to ${who}, so there is no one to nudge.` }, 400);
   }
 
-  const cutoff = new Date(Date.now() - NUDGE_COOLDOWN_HOURS * 3600 * 1000)
-    .toISOString().replace('T', ' ').slice(0, 19);
-
   const sent = [], skipped = [];
   for (const owner of owners.results) {
     if (owner.id === actor.id) { skipped.push(`${owner.name} (that is you)`); continue; }
 
-    const recent = await c.env.DB.prepare(
-      `SELECT sent_at FROM nudges WHERE task_id = ?1 AND sent_to = ?2 AND sent_at > ?3 LIMIT 1`
-    ).bind(id, owner.id, cutoff).first();
-    if (recent) { skipped.push(`${owner.name} (nudged in the last ${NUDGE_COOLDOWN_HOURS}h)`); continue; }
-
-    const res = await sendEmail(c.env, nudgeEmail(owner, task, project, actor, `${c.env.APP_URL}/#${project.id}`));
-    if (res.ok) {
-      await c.env.DB.prepare(
-        `INSERT INTO nudges (task_id, sent_by, sent_to) VALUES (?1, ?2, ?3)`
-      ).bind(id, actor.id, owner.id).run();
-      sent.push(owner.name);
-    } else {
-      skipped.push(`${owner.name} (email failed)`);
-    }
+    const result = await sendNudgeIfDue(c.env, {
+      task, owner, sentById: actor.id,
+      buildMessage: (url) => nudgeEmail(owner, task, project, actor, url),
+    });
+    if (result.sent) sent.push(owner.name);
+    else if (result.reason === 'cooldown') skipped.push(`${owner.name} (nudged in the last ${NUDGE_COOLDOWN_HOURS}h)`);
+    else skipped.push(`${owner.name} (email failed)`);
   }
   return json(c, { ok: true, sent, skipped });
 });
+
+/**
+ * Automatic due-date reminders. Not an HTTP route: called from the
+ * `scheduled` handler below (Cloudflare cron trigger), once a day.
+ *
+ * Picks up every task with a due date that is not 'done' and is within
+ * DUE_REMINDER_LEAD_DAYS of its due date OR already overdue (no upper bound,
+ * it keeps reminding daily until the task is marked done). Emails every
+ * active human owner, subject to the same 24h cooldown as a manual Nudge via
+ * sendNudgeIfDue(), so this can never double up with a Nudge someone already
+ * sent today, or fire more than once a day per person even across several
+ * qualifying tasks.
+ */
+export async function runDueDateReminders(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const cutoffDate = new Date(Date.now() + DUE_REMINDER_LEAD_DAYS * 86400000).toISOString().slice(0, 10);
+
+  const due = await env.DB.prepare(
+    `SELECT * FROM tasks WHERE due_date IS NOT NULL AND due_date <= ?1 AND status != 'done'`
+  ).bind(cutoffDate).all();
+
+  let remindersSent = 0;
+  for (const task of due.results) {
+    const project = await env.DB.prepare(`SELECT * FROM projects WHERE id = ?1`).bind(task.project_id).first();
+    if (!project) continue;
+
+    const owners = await env.DB.prepare(
+      `SELECT u.id, u.name, u.email FROM task_owners t
+         JOIN users u ON u.id = t.user_id
+        WHERE t.task_id = ?1 AND u.status = 'active' AND u.is_system = 0`
+    ).bind(task.id).all();
+
+    const isOverdue = task.due_date < today;
+    for (const owner of owners.results) {
+      const result = await sendNudgeIfDue(env, {
+        task, owner, sentById: SYSTEM_USER_ID,
+        buildMessage: (url) => dueDateReminderEmail(owner, task, project, url, isOverdue),
+      });
+      if (result.sent) remindersSent++;
+    }
+  }
+  return { tasksChecked: due.results.length, remindersSent };
+}
 
 // ===========================================================================
 // SETTINGS (admin only, replacing the draft's "type DEONI" gates)
@@ -939,4 +1075,11 @@ function safeParse(str, fallback) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
-export default app;
+export default {
+  fetch: (request, env, ctx) => app.fetch(request, env, ctx),
+  // Cloudflare cron trigger, see wrangler.toml [triggers]. Runs once a day;
+  // waitUntil keeps the Worker alive until every reminder email is sent.
+  scheduled: async (event, env, ctx) => {
+    ctx.waitUntil(runDueDateReminders(env));
+  },
+};

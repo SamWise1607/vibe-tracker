@@ -4,7 +4,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import app from '../src/index.js';
+import app, { runDueDateReminders } from '../src/index.js';
 import {
   makeEnv, installFakeEmail, outbox, req, cookieFrom,
   tokenFromLastEmail, check, section, results,
@@ -35,7 +35,9 @@ installFakeEmail();
 section('Seed data loaded correctly');
 {
   const n = (sql) => env._rawDb.prepare(sql).get().n;
-  check('6 users seeded',      n('SELECT COUNT(*) n FROM users') === 6);
+  check('6 real users seeded', n('SELECT COUNT(*) n FROM users WHERE is_system = 0') === 6);
+  check('plus the 1 system user for automated reminders',
+        n("SELECT COUNT(*) n FROM users WHERE is_system = 1 AND id = 'system'") === 1);
   check('6 projects seeded',   n('SELECT COUNT(*) n FROM projects') === 6);
   check('36 tasks seeded',     n('SELECT COUNT(*) n FROM tasks') === 36);
   check('3 admins',            n("SELECT COUNT(*) n FROM users WHERE role='admin'") === 3);
@@ -138,6 +140,19 @@ section('State endpoint shape');
 
   check('every task exposes a numeric id for the UI',
         state.initiatives.flatMap((p) => p.tasks).every((t) => Number.isInteger(t.id)));
+}
+
+section('The automated-reminder system user is hidden from /api/users');
+{
+  const adminCookie = await signIn('sam@visionbrokers.co.za');
+  const adminList = await jsonOf(await call('/api/users', { cookie: adminCookie }));
+  check('admin user list excludes the system user',
+        !adminList.some((u) => u.id === 'system'), JSON.stringify(adminList.map((u) => u.id)));
+
+  const memberCookie = await signIn('mia@visionbrokers.co.za');
+  const memberList = await jsonOf(await call('/api/users', { cookie: memberCookie }));
+  check('member user list excludes the system user',
+        !memberList.some((u) => u.id === 'system'), JSON.stringify(memberList.map((u) => u.id)));
 }
 
 section('Tasks: create, update, delete');
@@ -396,9 +411,9 @@ section('Task notes: multiple boxes per task, any signed-in user');
 
   const state = await jsonOf(await call('/api/state', { cookie: admin }));
   const task24 = state.initiatives.flatMap((p) => p.tasks).find((t) => t.id === 24);
-  const newest = task24.notes.slice(-2);
-  check('GET /api/state exposes both new notes as separate {id, text} boxes, in order, appended after the seeded one',
-        newest.length === 2 && newest[0].text === 'first note' && newest[1].text === 'second note',
+  const newest = task24.notes.slice(0, 2);
+  check('GET /api/state exposes both new notes as separate {id, text} boxes, newest first',
+        newest.length === 2 && newest[0].text === 'second note' && newest[1].text === 'first note',
         JSON.stringify(task24.notes));
 
   const edit = await call(`/api/tasks/24/notes/${add1.id}`, { method: 'PATCH', cookie: admin, body: { text: 'edited note' } });
@@ -616,6 +631,130 @@ section('Resilience: email failure must not break the action');
   check('owner still added when the email provider is down', res.ok === true && res.emailed === false, JSON.stringify(res));
   const row = env._rawDb.prepare("SELECT 1 x FROM project_owners WHERE project_id='vib' AND user_id='mia'").get();
   check('database write committed regardless', !!row);
+}
+
+section('Task numbers ("1.1" style) and drag-to-reorder');
+{
+  // Fresh env: this section creates its own project and freely rewrites
+  // sort_order, no need to share state with anything before or after it.
+  env = makeEnv(paths);
+  installFakeEmail();
+  const cookie = await signIn('sam@visionbrokers.co.za');
+  const memberCookie = await signIn('mia@visionbrokers.co.za');
+
+  const newProj = await jsonOf(await call('/api/projects', { method: 'POST', cookie, body: { name: 'Reorder Test Project' } }));
+  const projectId = newProj.id;
+  const projNum = env._rawDb.prepare(`SELECT num FROM projects WHERE id = ?`).get(projectId).num;
+
+  const ids = ['A', 'B', 'C', 'D'].map((label, i) => {
+    const status = label === 'C' ? 'done' : 'in-progress';
+    const r = env._rawDb.prepare(
+      `INSERT INTO tasks (project_id, name, status, sort_order) VALUES (?, ?, ?, ?)`
+    ).run(projectId, `Reorder test ${label}`, status, i);
+    return Number(r.lastInsertRowid);
+  });
+  const [taskA, taskB, taskC, taskD] = ids;
+
+  let state = await jsonOf(await call('/api/state', { cookie }));
+  let proj = state.initiatives.find((p) => p.id === projectId);
+  const byName = (n) => proj.tasks.find((t) => t.name === n);
+
+  check('first non-done task is numbered N.1', byName('Reorder test A').number === `${projNum}.1`);
+  check('second non-done task is numbered N.2', byName('Reorder test B').number === `${projNum}.2`);
+  check('a done task gets no number at all', byName('Reorder test C').number === null,
+        JSON.stringify(byName('Reorder test C')));
+  check('numbering skips the done one, so the next non-done task is N.3, not N.4',
+        byName('Reorder test D').number === `${projNum}.3`);
+
+  // Reorder: move D to the front.
+  const newOrder = [taskD, taskA, taskB, taskC];
+  const reorderRes = await call(`/api/projects/${projectId}/tasks/reorder`, {
+    method: 'PUT', cookie, body: { taskIds: newOrder },
+  });
+  check('admin can reorder', reorderRes.status === 200, `got ${reorderRes.status}`);
+
+  state = await jsonOf(await call('/api/state', { cookie }));
+  proj = state.initiatives.find((p) => p.id === projectId);
+  check('after reordering, D is now first and renumbered N.1',
+        proj.tasks[0].name === 'Reorder test D' && proj.tasks[0].number === `${projNum}.1`,
+        JSON.stringify(proj.tasks.map((t) => [t.name, t.number])));
+  check('A moved to second place and renumbered N.2',
+        proj.tasks[1].name === 'Reorder test A' && proj.tasks[1].number === `${projNum}.2`);
+
+  // Permissions and validation.
+  const memberTry = await call(`/api/projects/${projectId}/tasks/reorder`, {
+    method: 'PUT', cookie: memberCookie, body: { taskIds: [taskA, taskB, taskC, taskD] },
+  });
+  check('member gets 403 reordering', memberTry.status === 403, `got ${memberTry.status}`);
+
+  const missingOne = await call(`/api/projects/${projectId}/tasks/reorder`, {
+    method: 'PUT', cookie, body: { taskIds: [taskA, taskB, taskC] },
+  });
+  check('reorder rejects a list missing one of the project\'s tasks', missingOne.status === 400,
+        `got ${missingOne.status}`);
+
+  const foreignTask = env._rawDb.prepare(
+    `SELECT id FROM tasks WHERE project_id != ? LIMIT 1`
+  ).get(projectId).id;
+  const foreignId = await call(`/api/projects/${projectId}/tasks/reorder`, {
+    method: 'PUT', cookie, body: { taskIds: [taskA, taskB, taskC, foreignTask] },
+  });
+  check('reorder rejects a task id from a different project', foreignId.status === 400,
+        `got ${foreignId.status}`);
+}
+
+section('Automatic due-date reminders');
+{
+  env = makeEnv(paths);
+  installFakeEmail();
+  const cookie = await signIn('sam@visionbrokers.co.za');
+  outbox.length = 0;
+
+  const iso = (offsetDays) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+  const projectId = env._rawDb.prepare('SELECT id FROM projects LIMIT 1').get().id;
+
+  function makeTask(name, dueOffsetDays, status, ownerId) {
+    const r = env._rawDb.prepare(
+      `INSERT INTO tasks (project_id, name, status, due_date, sort_order) VALUES (?, ?, ?, ?, 999)`
+    ).run(projectId, name, status, iso(dueOffsetDays));
+    const taskId = Number(r.lastInsertRowid);
+    if (ownerId) env._rawDb.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?, ?)`).run(taskId, ownerId);
+    return taskId;
+  }
+
+  const dueSoon  = makeTask('Reminder test: due in 3 days',  3,  'in-progress', 'elrine');
+  makeTask('Reminder test: due in 10 days', 10, 'in-progress', 'stan');
+  makeTask('Reminder test: overdue',        -1, 'blocked',     'stan');
+  makeTask('Reminder test: done today',      0, 'done',        'elrine');
+
+  const alreadyNudged = makeTask('Reminder test: nudged manually already', 0, 'in-progress', 'mia');
+  env._rawDb.prepare(`INSERT INTO nudges (task_id, sent_by, sent_to) VALUES (?, 'sam', 'mia')`).run(alreadyNudged);
+
+  await runDueDateReminders(env);
+  const subjects = outbox.map((m) => m.subject);
+
+  check('task due within the 7-day lead time gets a "Due soon" reminder',
+        subjects.includes('Due soon: Reminder test: due in 3 days'), JSON.stringify(subjects));
+  check('task due beyond the 7-day lead time gets nothing yet',
+        !subjects.some((s) => s.includes('due in 10 days')), JSON.stringify(subjects));
+  check('overdue task gets an "Overdue" reminder instead of "Due soon"',
+        subjects.includes('Overdue: Reminder test: overdue'), JSON.stringify(subjects));
+  check('a task already marked done gets no reminder even though due today',
+        !subjects.some((s) => s.includes('done today')), JSON.stringify(subjects));
+  check('a task someone already manually nudged in the last 24h is skipped, not double-sent',
+        !subjects.some((s) => s.includes('nudged manually already')), JSON.stringify(subjects));
+  check('automatic reminders are recorded in nudges with the system user as sender',
+        env._rawDb.prepare(`SELECT COUNT(*) n FROM nudges WHERE sent_by = 'system'`).get().n === 2);
+  check('reminder emails read as automatic, not as a person asking',
+        outbox.every((m) => /VIBE Tracker/.test(m.heading)), JSON.stringify(outbox.map((m) => m.heading)));
+
+  // Dedup the other way: an automatic reminder just sent should count against
+  // the same 24h cooldown as a manual Nudge, so a manual Nudge right after is blocked.
+  outbox.length = 0;
+  const manualAfter = await jsonOf(await call(`/api/tasks/${dueSoon}/nudge`, { method: 'POST', cookie }));
+  check('a manual Nudge right after an automatic reminder is blocked by the same cooldown',
+        manualAfter.sent.length === 0 && /Elrine/.test(JSON.stringify(manualAfter.skipped)) && outbox.length === 0,
+        JSON.stringify(manualAfter));
 }
 
 section('Logout');

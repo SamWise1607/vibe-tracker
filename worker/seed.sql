@@ -2,8 +2,10 @@
 -- Generated from vibe_dashboardDRAFT.html. Do not hand-edit; regenerate instead.
 -- Run with: npx wrangler d1 execute vibe-tracker --file=./seed.sql --remote
 
+-- WHERE is_system = 0: never wipe the automated-reminder system user (added
+-- in schema.sql, not part of the draft-generated data below).
 DELETE FROM task_notes; DELETE FROM task_owners; DELETE FROM tasks; DELETE FROM key_risks;
-DELETE FROM project_owners; DELETE FROM projects; DELETE FROM settings; DELETE FROM users;
+DELETE FROM project_owners; DELETE FROM projects; DELETE FROM settings; DELETE FROM users WHERE is_system = 0;
 
 -- Users -------------------------------------------------------
 INSERT INTO users (id,name,email,role,status) VALUES ('sam','Sam','sam@visionbrokers.co.za','admin','active');
@@ -12,6 +14,10 @@ INSERT INTO users (id,name,email,role,status) VALUES ('ferdi','Ferdi','ferdi@vis
 INSERT INTO users (id,name,email,role,status) VALUES ('mia','Mia','mia@visionbrokers.co.za','member','active');
 INSERT INTO users (id,name,email,role,status) VALUES ('stan','Stan','stanford@visionbrokers.co.za','member','active');
 INSERT INTO users (id,name,email,role,status) VALUES ('elrine','Elrine','elrine@visionbrokers.co.za','member','active');
+-- Idempotent: guarantees the system user exists even if seed.sql is ever run
+-- standalone, without wiping/duplicating it if schema.sql already added it.
+INSERT OR IGNORE INTO users (id,name,email,role,status,is_system)
+  VALUES ('system','VIBE Tracker','system@vibe-tracker.local','member','active',1);
 
 -- Settings ----------------------------------------------------
 INSERT INTO settings (key,value,updated_by) VALUES ('focus_this_week','Fortress: finalise the distribution plan and start contacting pilot partners.','deoni');

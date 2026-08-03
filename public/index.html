@@ -100,7 +100,12 @@
   table.tasks th{text-align:left;font-family:'IBM Plex Mono',monospace;font-size:11.5px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-faint);padding:7px 9px;border-bottom:1px solid var(--border);}
   table.tasks td{padding:9px 9px;border-bottom:1px solid rgba(43,50,64,0.6);vertical-align:top;}
   table.tasks tr:last-child td{border-bottom:none;}
+  .task-num[draggable="true"]{cursor:grab;}
+  table.tasks tr.dragging{opacity:0.4;}
+  tr.task-row-done{opacity:0.4;}
+  tr.task-row-done .task-name{text-decoration:line-through;color:var(--text-faint);}
   .task-name{color:var(--text);}
+  .task-num{color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:12px;margin-right:2px;}
   .task-owner{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
   select.task-status{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:4px 7px;border-radius:5px;}
   select.task-status:disabled{opacity:0.62;cursor:not-allowed;}
@@ -711,18 +716,24 @@ function renderCards(){
           </colgroup>
           <thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Due</th><th>Note</th></tr></thead>
           <tbody>
-            ${(init.tasks || []).map((t,ti)=>{
+            ${(()=>{
+              const tasks = init.tasks || [];
+              const order = tasks.map((_, ti)=>ti)
+                .sort((a,b)=>(tasks[a].status === 'done' ? 1 : 0) - (tasks[b].status === 'done' ? 1 : 0));
+              return order.map(ti=>{
+              const t = tasks[ti];
               const ownsTask = (t.owners || []).some(o=>o.id === currentUser().id);
               const statusDisabled = (!admin && !ownsTask) ? 'disabled' : '';
               return `
-              <tr>
-                <td class="task-name">${escapeHtml(t.name)}</td>
+              <tr class="${t.status === 'done' ? 'task-row-done' : ''}" data-task-id="${t.id}">
+                <td class="task-name">${t.number ? `<span class="task-num"${admin && !isPreviewing() ? ' draggable="true"' : ''}>${escapeHtml(t.number)}</span> ` : ''}${escapeHtml(t.name)}</td>
                 <td><div class="owners-row">${taskOwnerChips(t, idx, ti)}${admin?`<span class="owner-add"><select class="owner-select" data-add-task-owner-input="${idx}" data-task="${ti}"><option value="">+ owner</option>${taskOwnerAddOptions(t)}</select><button data-add-task-owner-btn="${idx}" data-task="${ti}">Add</button></span>`:''}</div></td>
                 <td><select class="task-status" data-init="${idx}" data-task="${ti}" ${statusDisabled}>${taskStatusOptions(t.status)}</select>${admin && (t.owners || []).length ? `<button class="nudge-btn" data-nudge="${idx}" data-task="${ti}">Nudge</button>`:''}${admin ? `<button class="nudge-btn" data-delete-task="${idx}" data-task="${ti}">Delete</button>`:''}<div class="save-note" data-nudge-note="${idx}-${ti}"></div></td>
                 <td><input type="date" class="task-due" data-init="${idx}" data-task="${ti}" value="${t.due || ''}">${t.due ? daysLeftBadge(t.due) : ''}</td>
                 <td>${taskNotes(t, idx, ti)}</td>
               </tr>
-            `}).join('')}
+            `}).join('');
+            })()}
           </tbody>
         </table>
         <div class="add-task-row" data-add-task-wrap="${idx}">
@@ -895,7 +906,7 @@ function bindCardEvents(container){
     const text = input.value.trim();
     if(!text) return;
     const tempNote = {id:`temp-${Date.now()}`, text};
-    task.notes.push(tempNote);
+    task.notes.unshift(tempNote);
     input.value = '';
     await write(btn, ()=>api(`/api/tasks/${task.id}/notes`, {method:'POST', body:{text}}), ()=>{task.notes = task.notes.filter(n=>n !== tempNote);}, result=>{ if(result.id) tempNote.id = result.id; });
     render(); reopen(i);
@@ -1006,6 +1017,46 @@ function bindCardEvents(container){
       render(); reopen(idx);
     }
   }));
+  container.querySelectorAll('table.tasks tbody').forEach(tbody=>{
+    let dragged = null;
+
+    tbody.querySelectorAll('.task-num[draggable="true"]').forEach(handle=>{
+      handle.addEventListener('dragstart', e=>{
+        dragged = handle.closest('tr');
+        dragged.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', '');
+      });
+      handle.addEventListener('dragend', ()=>{
+        dragged?.classList.remove('dragging');
+        dragged = null;
+      });
+    });
+
+    tbody.addEventListener('dragover', e=>{
+      if(!dragged) return;
+      e.preventDefault();
+      const target = e.target.closest('tr');
+      if(!target || target === dragged || target.parentNode !== tbody) return;
+      const rect = target.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      tbody.insertBefore(dragged, before ? target : target.nextSibling);
+    });
+
+    tbody.addEventListener('drop', async e=>{
+      e.preventDefault();
+      if(!dragged) return;
+      const row = dragged;
+      const card = tbody.closest('.card');
+      const idx = Array.from(document.querySelectorAll('.card')).indexOf(card);
+      const init = state.initiatives[idx];
+      const newOrder = Array.from(tbody.querySelectorAll('tr[data-task-id]')).map(tr=>+tr.dataset.taskId);
+      const before = init.tasks.slice();
+      init.tasks = newOrder.map(id=>init.tasks.find(t=>t.id === id));
+      render(); reopen(idx);
+      await write(row, ()=>api(`/api/projects/${init.id}/tasks/reorder`, {method:'PUT', body:{taskIds:newOrder}}),
+        ()=>{ init.tasks = before; render(); reopen(idx); });
+    });
+  });
   container.querySelectorAll('[data-add-task-toggle]').forEach(btn=>btn.addEventListener('click', ()=>{
     const idx = +btn.dataset.addTaskToggle;
     const wrap = container.querySelector(`[data-add-task-wrap="${idx}"]`);

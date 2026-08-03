@@ -138,6 +138,30 @@ export function nudgeEmail(user, task, project, askedBy, url) {
   };
 }
 
+/**
+ * Automatic due-date reminder. Sent by the "VIBE Tracker" system user, not a
+ * person, so the copy is deliberately different from nudgeEmail() (no
+ * "X is asking for an update") even though it goes through the same
+ * sendEmail() and the same nudges-table dedup/rate-limit as a manual Nudge.
+ */
+export function dueDateReminderEmail(user, task, project, url, isOverdue) {
+  return {
+    toEmail: user.email,
+    toName: user.name,
+    subject: `${isOverdue ? 'Overdue' : 'Due soon'}: ${task.name}`,
+    heading: `VIBE Tracker: this task is ${isOverdue ? 'overdue' : 'due soon'}`,
+    body:
+      `Project: ${project.name}\n` +
+      `Task: ${task.name}\n` +
+      `Current status: ${taskStatusLabel(task.status)}\n` +
+      `Due: ${task.due_date}\n` +
+      '\nThis is an automatic reminder, not a person nudging you. Open the tracker ' +
+      'and update the status or leave a note once you have.',
+    ctaUrl: url,
+    ctaLabel: 'Open the task',
+  };
+}
+
 export function joinRequestEmail(admin, requester, url) {
   return {
     toEmail: admin.email,

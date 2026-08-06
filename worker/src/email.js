@@ -18,6 +18,137 @@
 
 const EMAILJS_ENDPOINT = 'https://api.emailjs.com/api/v1.0/email/send';
 
+// ---------------------------------------------------------------------------
+// SPIKE, 6 Aug 2026. Direct-SMTP alternative to EmailJS: sends straight to
+// the existing mail.visionbrokers.co.za mailbox over Cloudflare's TCP
+// sockets, via the `worker-mailer` package, instead of going through
+// EmailJS's REST API and its 200/month quota. See
+// EMAIL-PROVIDER-COMPARISON-2026-08-06.md for why.
+//
+// Deliberately NOT wired into sendEmail() yet, and nothing above this call
+// site changes. This exists only so a one-off admin test route (see
+// /api/debug/test-smtp in index.js) can send a single real email and prove
+// the approach works before anything live depends on it.
+//
+// New secrets this needs, set the same way as the EmailJS ones:
+//   npx wrangler secret put SMTP_USERNAME   (vibetracker@visionbrokers.co.za)
+//   npx wrangler secret put SMTP_PASSWORD   (that mailbox's real password)
+// Host/port default to the same values EmailJS's SMTP service already uses
+// (mail.visionbrokers.co.za, port 465, SSL), overridable via env if ever
+// needed.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} env
+ * @param {object} msg   same shape as sendEmail()'s msg, see below
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function sendEmailDirectSmtp(env, msg) {
+  if (!env.SMTP_USERNAME || !env.SMTP_PASSWORD) {
+    return { ok: false, error: 'SMTP_USERNAME / SMTP_PASSWORD not set. Run: npx wrangler secret put SMTP_USERNAME (and SMTP_PASSWORD)' };
+  }
+
+  const bodyText =
+    `${msg.heading || msg.subject}\n\n${msg.body}\n` +
+    (msg.ctaUrl ? `\n${msg.ctaLabel || 'Open'}: ${msg.ctaUrl}\n` : '');
+
+  try {
+    // Lazy import: keeps this dependency out of the way of the live email
+    // path entirely unless this function is actually called.
+    const { WorkerMailer } = await import('worker-mailer');
+
+    const mailer = await WorkerMailer.connect({
+      host: env.SMTP_HOST || 'mail.visionbrokers.co.za',
+      port: Number(env.SMTP_PORT || 465),
+      secure: true,
+      credentials: {
+        username: env.SMTP_USERNAME,
+        password: env.SMTP_PASSWORD,
+      },
+      authType: 'plain',
+    });
+
+    await mailer.send({
+      from: { name: 'VIBE Tracker', email: env.SMTP_USERNAME },
+      to: msg.toEmail,
+      subject: msg.subject,
+      text: bodyText,
+      html: buildHtmlEmail(msg),
+    });
+
+    return { ok: true };
+  } catch (err) {
+    // Same philosophy as sendEmail(): never throw, a failed test send is
+    // just a failed test send.
+    console.error('Direct SMTP send failed', err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * HTML shell for direct-SMTP sends, styled to match the app's own dark
+ * theme (same colours as public/index.html's --ink/--surface/--signal
+ * variables) instead of arriving as a bare link. Table-based, all styles
+ * inline, no external fonts or flexbox: Outlook desktop's rendering engine
+ * ignores most of that, so this sticks to what it actually respects.
+ */
+function buildHtmlEmail(msg) {
+  const heading = escapeHtml(msg.heading || msg.subject);
+  const bodyHtml = escapeHtml(msg.body).replace(/\n/g, '<br>');
+  const cta = msg.ctaUrl ? `
+<tr><td style="padding:0 32px 32px;">
+  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    <td style="background:#3fd9c2;border-radius:6px;">
+      <a href="${msg.ctaUrl}" style="display:inline-block;padding:12px 22px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;color:#0e1015;text-decoration:none;border-radius:6px;">${escapeHtml(msg.ctaLabel || 'Open')}</a>
+    </td>
+  </tr></table>
+</td></tr>` : '';
+
+  return `<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#0e1015;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0e1015;padding:32px 16px;">
+<tr><td align="center">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:#1b1f27;border:1px solid #2b3240;border-radius:10px;">
+<tr><td style="padding:28px 32px 8px;">
+  <div style="font-family:Arial,Helvetica,sans-serif;font-weight:700;font-size:20px;color:#eceff3;letter-spacing:0.3px;">VIBE <span style="color:#3fd9c2;">Tracker</span></div>
+</td></tr>
+<tr><td style="padding:8px 32px 4px;">
+  <div style="font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:700;color:#eceff3;">${heading}</div>
+</td></tr>
+<tr><td style="padding:8px 32px 24px;">
+  <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#c3c8d1;">${bodyHtml}</div>
+</td></tr>
+${cta}
+<tr><td style="padding:0 32px 24px;border-top:1px solid #2b3240;">
+  <div style="padding-top:16px;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#5c6577;">Sent by the VIBE Tracker, direct from mail.visionbrokers.co.za.</div>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** True if toEmail is on the SMTP_PILOT_EMAILS allowlist (case-insensitive). */
+function isPilotRecipient(env, toEmail) {
+  if (!env.SMTP_PILOT_EMAILS || !toEmail) return false;
+  return env.SMTP_PILOT_EMAILS
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(toEmail.toLowerCase());
+}
+
 /**
  * @param {object} env      Worker env bindings
  * @param {object} msg
@@ -31,6 +162,16 @@ const EMAILJS_ENDPOINT = 'https://api.emailjs.com/api/v1.0/email/send';
  * @returns {Promise<{ok: boolean, error?: string}>}
  */
 export async function sendEmail(env, msg) {
+  // Pilot rollout (6 Aug 2026): SMTP_PILOT_EMAILS is a comma-separated allowlist
+  // of recipients who get direct SMTP instead of EmailJS, everyone else is
+  // unaffected. Plan agreed with Sam: her alone first, then add Deoni after a
+  // week if it holds up, then a full swap. "Full swap" should retire this
+  // check entirely and make sendEmailDirectSmtp() the only path, not just grow
+  // this list to all six people.
+  if (isPilotRecipient(env, msg.toEmail)) {
+    return sendEmailDirectSmtp(env, msg);
+  }
+
   const payload = {
     service_id:  env.EMAILJS_SERVICE_ID,
     template_id: env.EMAILJS_TEMPLATE_ID,

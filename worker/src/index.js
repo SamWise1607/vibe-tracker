@@ -16,6 +16,7 @@ import {
 import {
   sendEmail, magicLinkEmail, addedToProjectEmail, addedToTaskEmail,
   nudgeEmail, dueDateReminderEmail, noteActivityEmail, joinRequestEmail, approvedEmail,
+  sendEmailDirectSmtp,
 } from './email.js';
 
 const app = new Hono();
@@ -1158,6 +1159,28 @@ app.post('/api/audit/:id/restore', requireAuth, requireAdmin, async (c) => {
     detail: `"${snap.name}" restored from the Activity Log`,
   });
   return json(c, { ok: true, id: snap.id });
+});
+
+// ===========================================================================
+// SPIKE, 6 Aug 2026: direct-SMTP-vs-EmailJS test (admin only).
+// Sends one real email to the calling admin's own address, straight to
+// mail.visionbrokers.co.za, bypassing EmailJS entirely. Does not touch the
+// live sendEmail() path or any real feature. Safe to leave in, safe to
+// delete once the spike is decided one way or the other. See
+// EMAIL-PROVIDER-COMPARISON-2026-08-06.md.
+// ===========================================================================
+app.post('/api/debug/test-smtp', requireAuth, requireAdmin, async (c) => {
+  const user = c.get('user');
+  const res = await sendEmailDirectSmtp(c.env, {
+    toEmail: user.email,
+    toName: user.name,
+    subject: 'VIBE Tracker: direct-SMTP test',
+    heading: 'Direct SMTP test',
+    body:
+      'If you are reading this, the Worker sent it straight to mail.visionbrokers.co.za ' +
+      'over SMTP via worker-mailer, with no EmailJS involved.',
+  });
+  return json(c, res, res.ok ? 200 : 502);
 });
 
 // ---------------------------------------------------------------------------

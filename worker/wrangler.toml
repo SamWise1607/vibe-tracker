@@ -2,6 +2,11 @@ name = "vibe-tracker"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 
+# Required by the worker-mailer package (spike, 6 Aug 2026: direct SMTP send
+# to mail.visionbrokers.co.za, see EMAIL-PROVIDER-COMPARISON-2026-08-06.md).
+# Not used by anything else yet, safe to remove if the spike doesn't pan out.
+compatibility_flags = ["nodejs_compat"]
+
 # Serve on vibe-tracker.visionbrokers.workers.dev
 workers_dev = true
 
@@ -37,10 +42,25 @@ database_id = "62d4d215-4e76-4400-809f-c97746f2c2e3"
 # because every magic link in every email is built from it.
 APP_URL = "https://vibe-tracker.visionbrokers.workers.dev"
 
+# Direct-SMTP pilot rollout (6 Aug 2026). Comma-separated allowlist: any email
+# to one of these addresses goes out via direct SMTP (worker-mailer, straight
+# to mail.visionbrokers.co.za) instead of EmailJS. Everyone else is unaffected.
+# Agreed rollout: Sam alone first, add Deoni after about a week if it holds
+# up, then a full swap (which should retire this allowlist entirely rather
+# than just growing it to all six people, see sendEmail() in email.js).
+SMTP_PILOT_EMAILS = "sam@visionbrokers.co.za"
+
 [triggers]
 # Daily due-date reminder check (runDueDateReminders in src/index.js).
 # 04:00 UTC = 06:00 SAST (South Africa doesn't observe DST, so this stays correct year-round).
 crons = ["0 4 * * *"]
+
+[observability]
+# Added 6 Aug 2026, alongside the direct-SMTP pilot. Persists console.log/
+# console.error (including every "Direct SMTP send failed" line) to the
+# Cloudflare dashboard for 3 days on the free plan, so failures during the
+# pilot week can be checked whenever, not just live via `wrangler tail`.
+enabled = true
 
 # ---------------------------------------------------------------------------
 # Secrets. NEVER put these here. Set them with:
@@ -51,4 +71,9 @@ crons = ["0 4 * * *"]
 #
 # EMAILJS_PRIVATE_KEY is the one that matters. It is what lets the Worker send
 # server-side. If it leaks, anyone can send email as you, up to your quota.
+#
+# Direct-SMTP spike (6 Aug 2026), only needed to test /api/debug/test-smtp:
+#   npx wrangler secret put SMTP_USERNAME     (vibetracker@visionbrokers.co.za)
+#   npx wrangler secret put SMTP_PASSWORD     (that mailbox's real password)
+# SMTP_HOST/SMTP_PORT are optional, default to mail.visionbrokers.co.za:465.
 # ---------------------------------------------------------------------------

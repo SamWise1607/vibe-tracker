@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>VIBE Tracker</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="favicon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -16,7 +19,7 @@
   .wrap{max-width:1560px;margin:0 auto;padding:28px 24px 80px;}
   .mono{font-family:'IBM Plex Mono',monospace;}
   header{margin-bottom:6px;}
-  .brand{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:36px;letter-spacing:0.5px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
+  .brand{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:36px;letter-spacing:0.5px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
   .brand span.tag{font-family:'IBM Plex Mono',monospace;font-weight:400;font-size:12px;color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase;}
   .sub{color:var(--text-dim);font-size:15px;margin-top:4px;}
   .pulse-box{margin:18px 0 22px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px 10px;}
@@ -188,7 +191,10 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="brand">VIBE <span class="tag">Vision Innovation &amp; Business Evolution</span><button class="lock-btn" id="sign-out-btn" style="margin-left:auto;">Sign out</button></div>
+    <div class="brand">
+      <img src="logo-header.png" alt="VIBE Tracker — Vision Innovation & Business Evolution" style="height:110px;width:auto;display:block;">
+      <button class="lock-btn" id="sign-out-btn" style="margin-left:auto;">Sign out</button>
+    </div>
     <div class="sub">Live operations tracker — 6 projects, shared across the team</div>
   </header>
 

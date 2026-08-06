@@ -27,7 +27,8 @@
     "sharp": true
   },
   "dependencies": {
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "worker-mailer": "^1.2.1"
   },
   "devDependencies": {
     "wrangler": "^4.114.0"

@@ -162,6 +162,29 @@ export function dueDateReminderEmail(user, task, project, url, isOverdue) {
   };
 }
 
+/**
+ * Sent to a task's other owners when someone adds or edits a note on it.
+ * Not the person who made the change (that exclusion happens at the call
+ * site, see notifyOtherOwnersOfNoteActivity in index.js). No rate limit,
+ * unlike Nudge/due-date reminders: this is informational, not a chase.
+ */
+export function noteActivityEmail(user, task, project, actor, url, { action, noteText }) {
+  const preview = noteText.length > 160 ? `${noteText.slice(0, 157)}…` : noteText;
+  return {
+    toEmail: user.email,
+    toName: user.name,
+    subject: `Note ${action}: ${task.name}`,
+    heading: `${actor.name} ${action} a note on a task you own`,
+    body:
+      `Project: ${project.name}\n` +
+      `Task: ${task.name}\n\n` +
+      `"${preview}"\n\n` +
+      'Open the tracker to see the full task.',
+    ctaUrl: url,
+    ctaLabel: 'Open the task',
+  };
+}
+
 export function joinRequestEmail(admin, requester, url) {
   return {
     toEmail: admin.email,

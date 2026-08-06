@@ -47,6 +47,17 @@ CREATE TABLE projects (
   name         TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'on-track'
                  CHECK (status IN ('on-track','at-risk','blocked','paused')),
+  -- Added 5 Aug 2026: a finished/shelved project, hidden from the dashboard
+  -- by default so it stops cluttering it. Reversible any time by an admin
+  -- via the same PATCH as any other project field. Deliberately a separate
+  -- flag rather than a 5th `status` value: a project keeps its real status
+  -- underneath even once archived, and it means this never requires
+  -- widening the `status` CHECK constraint (which in SQLite/D1 means
+  -- recreating the whole table, too dangerous given D1's `PRAGMA
+  -- foreign_keys = OFF` not reliably applying across a multi-statement
+  -- file execution). Fully independent of task status; archiving a project
+  -- does not touch its tasks.
+  archived     INTEGER NOT NULL DEFAULT 0,
   target_text  TEXT NOT NULL DEFAULT '',
   target_date  TEXT,                      -- ISO yyyy-mm-dd, nullable
   summary      TEXT NOT NULL DEFAULT '',
@@ -87,6 +98,11 @@ CREATE TABLE tasks (
   status      TEXT NOT NULL DEFAULT 'not-started'
                 CHECK (status IN ('not-started','in-progress','blocked','paused','done')),
   due_date    TEXT,                       -- ISO yyyy-mm-dd, nullable
+  -- Added 5 Aug 2026: optional "HH:MM" 24h time alongside due_date. Purely
+  -- informational/display, and only ever set together with a due_date (see
+  -- the app-level check in index.js). Due-date reminder logic (7-day lead,
+  -- daily until done) still keys off due_date's calendar day only.
+  due_time    TEXT,
   note        TEXT NOT NULL DEFAULT '',
   owner_label TEXT,                       -- for non-people: 'Legal', 'External (Discovery)', 'Unassigned'
   sort_order  INTEGER NOT NULL DEFAULT 0,

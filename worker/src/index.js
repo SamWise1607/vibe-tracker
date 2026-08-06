@@ -15,7 +15,7 @@ import {
 } from './auth.js';
 import {
   sendEmail, magicLinkEmail, addedToProjectEmail, addedToTaskEmail,
-  nudgeEmail, dueDateReminderEmail, joinRequestEmail, approvedEmail,
+  nudgeEmail, dueDateReminderEmail, noteActivityEmail, joinRequestEmail, approvedEmail,
 } from './email.js';
 
 const app = new Hono();
@@ -31,6 +31,35 @@ const SYSTEM_USER_ID = 'system';
 
 function nowIso() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// "HH:MM", 24h. Purely a display companion to due_date, see schema.sql.
+function isValidTime(t) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
+}
+
+/**
+ * Emails every other active human owner of a task that someone added or
+ * edited a note on it. Not rate limited (unlike Nudge/due-date reminders,
+ * see sendNudgeIfDue) since this is informational rather than a chase, and
+ * always excludes whoever made the change themselves.
+ */
+async function notifyOtherOwnersOfNoteActivity(env, { task, project, actor, action, noteText }) {
+  const owners = await env.DB.prepare(
+    `SELECT u.id, u.name, u.email FROM task_owners t
+       JOIN users u ON u.id = t.user_id
+      WHERE t.task_id = ?1 AND u.status = 'active' AND u.is_system = 0`
+  ).bind(task.id).all();
+
+  const notified = [];
+  for (const owner of owners.results) {
+    if (owner.id === actor.id) continue;
+    const res = await sendEmail(env, noteActivityEmail(
+      owner, task, project, actor, `${env.APP_URL}/#${project.id}`, { action, noteText }
+    ));
+    if (res.ok) notified.push(owner.name);
+  }
+  return notified;
 }
 
 const json = (c, data, status = 200) => c.json(data, status);
@@ -199,7 +228,13 @@ app.get('/api/state', requireAuth, async (c) => {
     // DESC: newest note first. Notes are still stored/inserted with an
     // ever-increasing sort_order (append-only), just displayed in reverse so
     // a newly added note folds in above older ones instead of at the bottom.
-    db.prepare(`SELECT id, task_id, body FROM task_notes ORDER BY task_id, sort_order DESC, id DESC`).all(),
+    // Joined to users twice to expose who originally added each note and
+    // when, shown on hover in the frontend (added 5 Aug 2026; deliberately
+    // still no "last edited by" beyond that, editing a note does not change
+    // the displayed author/timestamp).
+    db.prepare(`SELECT n.id, n.task_id, n.body, n.created_at, cu.name AS created_by_name
+                  FROM task_notes n LEFT JOIN users cu ON cu.id = n.created_by
+                 ORDER BY n.task_id, n.sort_order DESC, n.id DESC`).all(),
     db.prepare(`SELECT key, value FROM settings`).all(),
     db.prepare(`SELECT u.name AS by_name, p.updated_at AS at FROM projects p
                   LEFT JOIN users u ON u.id = p.updated_by
@@ -215,13 +250,16 @@ app.get('/api/state', requireAuth, async (c) => {
   const ownersByProject = groupBy(projOwners.results, 'project_id', (r) => ({ id: r.id, name: r.name }));
   const risksByProject  = groupBy(risks.results, 'project_id', (r) => r.body);
   const ownersByTask    = groupBy(taskOwners.results, 'task_id', (r) => ({ id: r.id, name: r.name }));
-  const notesByTask     = groupBy(taskNotes.results, 'task_id', (r) => ({ id: r.id, text: r.body }));
+  const notesByTask     = groupBy(taskNotes.results, 'task_id', (r) => ({
+    id: r.id, text: r.body, authorName: r.created_by_name || 'Unknown', createdAt: r.created_at,
+  }));
   const allTasksByProject = groupBy(tasks.results, 'project_id', (t) => ({
     id: t.id,
     name: t.name,
     status: t.status,
     due: t.due_date,
-    notes: notesByTask[t.id] || [],      // array of {id, text}, each its own box
+    dueTime: t.due_time,                // "HH:MM", nullable, informational only
+    notes: notesByTask[t.id] || [],      // array of {id, text, authorName, createdAt}, each its own box
     owners: ownersByTask[t.id] || [],
     ownerLabel: t.owner_label,          // 'Legal', 'External (Discovery)', 'Unassigned'
   }));
@@ -244,31 +282,34 @@ app.get('/api/state', requireAuth, async (c) => {
     }
   }
 
-  // Members see a project at all if they are either a named project owner
-  // (the project_owners list shown as chips on the card) OR own at least
-  // one task on it. A project matching neither does not appear for them,
-  // card and all. Once a project is visible to them, they see every task
-  // on it, not just their own, they just cannot edit anyone else's
-  // (enforced in PATCH /api/tasks/:id, unchanged by this). Admins always
-  // see everything.
-  const memberVisibleProjectIds = new Set(
-    projects.results
-      .filter((p) => {
-        const isProjectOwner = (ownersByProject[p.id] || []).some((o) => o.id === scopeUser.id);
-        const ownsATask = (allTasksByProject[p.id] || []).some((t) => (t.owners || []).some((o) => o.id === scopeUser.id));
-        return isProjectOwner || ownsATask;
-      })
-      .map((p) => p.id)
-  );
-  const visibleProjects = isAdmin ? projects.results : projects.results.filter((p) => memberVisibleProjectIds.has(p.id));
+  // All projects are visible to everyone, member or admin (changed 6 Aug
+  // 2026, was previously scoped to named project owners / task owners only
+  // for members). Editing rights are unaffected by this: a member can still
+  // edit only the status of a task they personally own, enforced separately
+  // in PATCH /api/tasks/:id.
+  const visibleProjects = projects.results;
   const tasksByProject = allTasksByProject;
+
+  // Archived is a separate `projects.archived` flag, not a status value (a
+  // project keeps its real status even once archived, see the schema
+  // comment). Hidden from the dashboard by default (still counted in
+  // archivedCount so the frontend can show a "Show archived (N)" toggle),
+  // same visibility rules as everything else otherwise: a member who
+  // couldn't see the project before archiving still can't see it after.
+  // ?includeArchived=1 reveals them.
+  const includeArchived = c.req.query('includeArchived') === '1';
+  const archivedCount = visibleProjects.filter((p) => !!p.archived).length;
+  const shownProjects = includeArchived ? visibleProjects : visibleProjects.filter((p) => !p.archived);
 
   // "Decisions Needed from Ferdi" is a team-wide status signal, not private
   // task data, so it is always built from the full unfiltered set, even for
   // members who cannot otherwise see Ferdi's tasks. Mirrors the existing
-  // client-side convention of hardcoding the 'ferdi' user id.
+  // client-side convention of hardcoding the 'ferdi' user id. Archived
+  // projects are excluded here too, same reasoning as hiding them from the
+  // dashboard: a shelved project's asks of Ferdi are stale.
   const ferdiDecisions = Object.entries(allTasksByProject).flatMap(([projectId, projectTasks]) => {
     const project = projects.results.find((p) => p.id === projectId);
+    if (project?.archived) return [];
     return projectTasks
       .filter((t) => (t.owners || []).some((o) => o.id === 'ferdi'))
       .map((t) => ({ ...t, projectId, projectName: project?.name || projectId }));
@@ -283,11 +324,13 @@ app.get('/api/state', requireAuth, async (c) => {
     leaderNotes: safeParse(settingsMap.leadership_notes, []),
     ferdiDecisions,
     lastEdited: { by: lastEdit?.by_name || '—', at: (lastEdit?.at || '').slice(0, 10) || '—' },
-    initiatives: visibleProjects.map((p) => ({
+    archivedCount,
+    initiatives: shownProjects.map((p) => ({
       id: p.id,
       num: p.num,
       name: p.name,
       status: p.status,
+      archived: !!p.archived,
       owners: ownersByProject[p.id] || [],
       target: p.target_text,
       targetDate: p.target_date,
@@ -329,6 +372,18 @@ const ADMIN_ONLY_PROJECT_FIELDS = {
   targetDate: 'target_date', summary: 'summary',
 };
 const PROJECT_STATUS_VALUES = ['on-track', 'at-risk', 'blocked', 'paused'];
+// `archived` is a separate `projects.archived` flag (0/1), deliberately NOT
+// a 5th status value: a project keeps its real status even once archived
+// (e.g. an at-risk project stays "at-risk" underneath), so nothing is lost
+// if it's ever unarchived. Also sidesteps ever needing to widen the
+// `status` CHECK constraint, which in SQLite/D1 means recreating the whole
+// `projects` table — too dangerous given D1's `PRAGMA foreign_keys = OFF`
+// not reliably taking effect across a multi-statement file execution (hit
+// this the hard way on 5 Aug 2026: recreating `projects` cascade-deleted
+// every task, note, and owner in the live database; recovered via D1 Time
+// Travel). Hidden from GET /api/state by default (see includeArchived
+// below), reversible any time via this same admin-only PATCH.
+const ADMIN_ONLY_PROJECT_BOOL_FIELDS = { archived: 'archived' };
 
 function slugify(name) {
   return String(name).toLowerCase().trim()
@@ -378,7 +433,8 @@ app.patch('/api/projects/:id', requireAuth, async (c) => {
   const actor = c.get('user');
   const body = await c.req.json().catch(() => ({}));
 
-  const adminFieldRequested = Object.keys(ADMIN_ONLY_PROJECT_FIELDS).some((key) => key in body);
+  const adminFieldRequested = Object.keys(ADMIN_ONLY_PROJECT_FIELDS).some((key) => key in body) ||
+    Object.keys(ADMIN_ONLY_PROJECT_BOOL_FIELDS).some((key) => key in body);
   if (adminFieldRequested && actor.role !== 'admin') {
     return json(c, { error: 'Editing project details is admin-only' }, 403);
   }
@@ -396,6 +452,13 @@ app.patch('/api/projects/:id', requireAuth, async (c) => {
       const v = key === 'name' ? String(body.name).trim()
               : (body[key] === '' && key === 'targetDate' ? null : body[key]);
       sets.push(`${column} = ?`); vals.push(v);
+    }
+  }
+  // Boolean fields (currently just `archived`) are handled separately from
+  // the generic string-field loop above so they coerce cleanly to 0/1.
+  if (actor.role === 'admin') {
+    for (const [key, column] of Object.entries(ADMIN_ONLY_PROJECT_BOOL_FIELDS)) {
+      if (key in body) { sets.push(`${column} = ?`); vals.push(body[key] ? 1 : 0); }
     }
   }
   if (!sets.length) return json(c, { error: 'Nothing to update' }, 400);
@@ -493,8 +556,13 @@ app.delete('/api/projects/:id/owners/:userId', requireAuth, async (c) => {
 app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   const projectId = c.req.param('id');
   const actor = c.get('user');
-  const { name, due, note, ownerIds } = await c.req.json().catch(() => ({}));
+  const { name, due, dueTime, note, ownerIds } = await c.req.json().catch(() => ({}));
   if (!String(name || '').trim()) return json(c, { error: 'Task needs a name' }, 400);
+
+  const cleanDue = String(due || '').trim() || null;
+  const cleanDueTime = String(dueTime || '').trim() || null;
+  if (cleanDueTime && !isValidTime(cleanDueTime)) return json(c, { error: 'Invalid due time' }, 400);
+  if (cleanDueTime && !cleanDue) return json(c, { error: 'Due time needs a due date' }, 400);
 
   // Members can only ever create a task assigned to themselves. Admins get
   // to pick, matching the owner field their version of the form shows.
@@ -507,10 +575,10 @@ app.post('/api/projects/:id/tasks', requireAuth, async (c) => {
   ).bind(projectId).first();
 
   const res = await c.env.DB.prepare(
-    `INSERT INTO tasks (project_id, name, status, due_date, sort_order, updated_at, updated_by)
-     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5, ?6)`
+    `INSERT INTO tasks (project_id, name, status, due_date, due_time, sort_order, updated_at, updated_by)
+     VALUES (?1, ?2, 'not-started', ?3, ?4, ?5, ?6, ?7)`
   ).bind(
-    projectId, String(name).trim(), String(due || '').trim() || null,
+    projectId, String(name).trim(), cleanDue, cleanDueTime,
     max.m + 1, nowIso(), actor.id,
   ).run();
 
@@ -578,7 +646,7 @@ app.put('/api/projects/:id/tasks/reorder', requireAuth, requireAdmin, async (c) 
   return json(c, { ok: true });
 });
 
-const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', ownerLabel: 'owner_label' };
+const TASK_FIELDS = { name: 'name', status: 'status', due: 'due_date', dueTime: 'due_time', ownerLabel: 'owner_label' };
 // Members can only ever touch status on a task, and only one they own.
 // Notes are a separate free-for-all (see TASK NOTES below); everything else
 // here (name, due date, non-person label) is admin-only.
@@ -599,13 +667,28 @@ app.patch('/api/tasks/:id', requireAuth, async (c) => {
     if (!owns) return json(c, { error: 'You can only edit tasks assigned to you' }, 403);
   }
 
+  if ('dueTime' in body && body.dueTime && !isValidTime(body.dueTime)) {
+    return json(c, { error: 'Invalid due time' }, 400);
+  }
+  // Clearing the due date also clears any due time, so callers don't have to
+  // clear both explicitly, and a due_time can never outlive its date.
+  const clearingDue = 'due' in body && !body.due;
+  const resultingDue = 'due' in body ? (body.due || null) : task.due_date;
+  const resultingDueTime = 'dueTime' in body ? (body.dueTime || null) : (clearingDue ? null : task.due_time);
+  if (resultingDueTime && !resultingDue) {
+    return json(c, { error: 'Due time needs a due date' }, 400);
+  }
+
   const fields = actor.role === 'admin' ? TASK_FIELDS : MEMBER_TASK_FIELDS;
   const sets = [], vals = [];
   for (const [key, column] of Object.entries(fields)) {
     if (key in body) {
       sets.push(`${column} = ?`);
-      vals.push(body[key] === '' && (key === 'due' || key === 'ownerLabel') ? null : body[key]);
+      vals.push(body[key] === '' && (key === 'due' || key === 'dueTime' || key === 'ownerLabel') ? null : body[key]);
     }
+  }
+  if (clearingDue && !('dueTime' in body) && task.due_time && actor.role === 'admin') {
+    sets.push('due_time = ?'); vals.push(null);
   }
   if (!sets.length) return json(c, { error: 'Nothing to update' }, 400);
 
@@ -658,7 +741,15 @@ app.post('/api/tasks/:id/notes', requireAuth, async (c) => {
     actorId: actor.id, action: 'task_note_added', entityType: 'task', entityId: taskId,
     detail: `Note added to "${task.name}"`,
   });
-  return json(c, { ok: true, id: res.meta.last_row_id });
+
+  // Notify this task's other owners (never the person who just added the
+  // note). Immediate, not rate limited, see notifyOtherOwnersOfNoteActivity.
+  const project = await c.env.DB.prepare(`SELECT * FROM projects WHERE id = ?1`).bind(task.project_id).first();
+  const notified = project
+    ? await notifyOtherOwnersOfNoteActivity(c.env, { task, project, actor, action: 'added', noteText: body })
+    : [];
+
+  return json(c, { ok: true, id: res.meta.last_row_id, notified });
 });
 
 app.patch('/api/tasks/:id/notes/:noteId', requireAuth, async (c) => {
@@ -684,7 +775,15 @@ app.patch('/api/tasks/:id/notes/:noteId', requireAuth, async (c) => {
     actorId: actor.id, action: 'task_note_updated', entityType: 'task', entityId: taskId,
     detail: `Note edited on task ${taskId}`,
   });
-  return json(c, { ok: true });
+
+  // Same notification as adding a note: every other owner, never the editor.
+  const task = await c.env.DB.prepare(`SELECT * FROM tasks WHERE id = ?1`).bind(taskId).first();
+  const project = task ? await c.env.DB.prepare(`SELECT * FROM projects WHERE id = ?1`).bind(note.project_id).first() : null;
+  const notified = (task && project)
+    ? await notifyOtherOwnersOfNoteActivity(c.env, { task, project, actor, action: 'edited', noteText: body })
+    : [];
+
+  return json(c, { ok: true, notified });
 });
 
 app.delete('/api/tasks/:id/notes/:noteId', requireAuth, async (c) => {
@@ -868,7 +967,9 @@ export async function runDueDateReminders(env) {
   let remindersSent = 0;
   for (const task of due.results) {
     const project = await env.DB.prepare(`SELECT * FROM projects WHERE id = ?1`).bind(task.project_id).first();
-    if (!project) continue;
+    // Archived projects are shelved on purpose; don't keep nagging owners
+    // about tasks that belong to one.
+    if (!project || project.archived) continue;
 
     const owners = await env.DB.prepare(
       `SELECT u.id, u.name, u.email FROM task_owners t
@@ -1029,10 +1130,10 @@ app.post('/api/audit/:id/restore', requireAuth, requireAdmin, async (c) => {
   if (!existing) return json(c, { error: 'The project this task belonged to no longer exists' }, 400);
 
   await c.env.DB.prepare(
-    `INSERT INTO tasks (id, project_id, name, status, due_date, note, owner_label, sort_order, updated_at, updated_by)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`
+    `INSERT INTO tasks (id, project_id, name, status, due_date, due_time, note, owner_label, sort_order, updated_at, updated_by)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`
   ).bind(
-    snap.id, snap.project_id, snap.name, snap.status, snap.due_date,
+    snap.id, snap.project_id, snap.name, snap.status, snap.due_date, snap.due_time ?? null,
     snap.note, snap.owner_label, snap.sort_order, nowIso(), actor.id,
   ).run();
 

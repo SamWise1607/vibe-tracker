@@ -278,7 +278,7 @@ section('Permissions: members cannot do admin things');
   check('member can still add a task', task.status === 200);
 }
 
-section('State: project visibility is scoped for members, not for admins');
+section('State: all projects are visible to everyone, member or admin (changed 6 Aug 2026)');
 {
   const member = await signIn('mia@visionbrokers.co.za');
   const admin  = await signIn('deoni@visionric.co.za');
@@ -288,43 +288,29 @@ section('State: project visibility is scoped for members, not for admins');
   const memberTasks = memberState.initiatives.flatMap((p) => p.tasks);
   check('Mia sees at least one task', memberTasks.length > 0);
 
-  // A member sees a project at all if they are EITHER a named project owner
-  // (the project_owners chip list on the card) OR own >=1 task on it, and
-  // once visible sees every task on it, not just their own.
-  // Mia owns task 7 (fortress) and task 23 (mrcn), via task ownership.
-  check('Mia sees fortress (owns task 7 there)', memberProjectIds.includes('fortress'));
-  check('Mia sees mrcn (owns task 23 there)', memberProjectIds.includes('mrcn'));
+  // The old rule (project owner OR task owner, otherwise the project
+  // disappears entirely) is gone. A member now sees every project and every
+  // task on it, exactly like an admin, including ones they own no stake in
+  // at all: vdirect (sam/elrine/"External (Discovery)" own its tasks, not
+  // Mia) and task 28 on it are both now visible to her.
+  check('Mia sees vdirect even though she owns nothing there', memberProjectIds.includes('vdirect'));
+  check('Mia sees task 28 on vdirect', memberTasks.some((t) => t.id === 28));
+  check('Mia sees fortress', memberProjectIds.includes('fortress'));
+  check('Mia sees mrcn', memberProjectIds.includes('mrcn'));
+  check('Mia sees vpic', memberProjectIds.includes('vpic'));
   const fortressForMia = memberState.initiatives.find((p) => p.id === 'fortress');
   check('Mia sees ALL of fortress\'s tasks, not just her own (task 1, owned by Deoni only, is visible to her)',
         fortressForMia.tasks.some((t) => t.id === 1 && !(t.owners || []).some((o) => o.id === 'mia')),
         JSON.stringify(fortressForMia.tasks.map((t) => t.id)));
 
-  // Mia is a named project_owners row on vpic, and owns no *task* there.
-  // That still counts, being a project owner is enough on its own.
-  check('Mia sees vpic, because she is a named project owner there, even though she owns no task on it',
-        memberProjectIds.includes('vpic'), JSON.stringify(memberProjectIds));
-  const vpicForMia = memberState.initiatives.find((p) => p.id === 'vpic');
-  check('Mia sees ALL of vpic\'s tasks, none of which are hers',
-        vpicForMia.tasks.length > 0 && vpicForMia.tasks.every((t) => !(t.owners || []).some((o) => o.id === 'mia')),
-        JSON.stringify(vpicForMia.tasks.map((t) => t.id)));
-
-  // vdirect: Mia is neither a project owner nor a task owner there (sam,
-  // elrine, and the "External (Discovery)" label own its tasks), so it's
-  // a project that should genuinely disappear for her. (Not using vib for
-  // this check: an earlier "add project owner" test in this same run adds
-  // Mia to vib's project_owners, which correctly makes it visible to her
-  // under this rule, that's the rule working, not a bug.)
-  check('Mia does not see vdirect at all (neither a project owner nor a task owner there)',
-        !memberProjectIds.includes('vdirect'), JSON.stringify(memberProjectIds));
-  check('Mia cannot see task 28, which is on vdirect', !memberTasks.some((t) => t.id === 28));
-
   const adminState = await jsonOf(await call('/api/state', { cookie: admin }));
   const adminTasks = adminState.initiatives.flatMap((p) => p.tasks);
   check('admin still sees task 24', adminTasks.some((t) => t.id === 24));
-  check('admin sees every project, member sees a subset',
-        adminState.initiatives.length > memberState.initiatives.length,
-        `admin ${adminState.initiatives.length} vs member ${memberState.initiatives.length}`);
-  check('admin sees more tasks overall than the member does', adminTasks.length > memberTasks.length,
+  check('admin and member see the exact same set of projects now',
+        JSON.stringify(memberProjectIds.slice().sort()) === JSON.stringify(adminState.initiatives.map((p) => p.id).sort()),
+        `admin ${JSON.stringify(adminState.initiatives.map((p) => p.id))} vs member ${JSON.stringify(memberProjectIds)}`);
+  check('admin and member see the same number of tasks overall',
+        adminTasks.length === memberTasks.length,
         `admin ${adminTasks.length} vs member ${memberTasks.length}`);
 
   check('ferdiDecisions is present for a member too',
@@ -755,6 +741,195 @@ section('Automatic due-date reminders');
   check('a manual Nudge right after an automatic reminder is blocked by the same cooldown',
         manualAfter.sent.length === 0 && /Elrine/.test(JSON.stringify(manualAfter.skipped)) && outbox.length === 0,
         JSON.stringify(manualAfter));
+}
+
+section('Task notes: author name and creation time exposed on hover');
+{
+  env = makeEnv(paths);
+  installFakeEmail();
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  const add = await jsonOf(await call('/api/tasks/1/notes', { method: 'POST', cookie: member, body: { text: 'authorship test note' } }));
+  check('note added', add.ok, JSON.stringify(add));
+
+  const state = await jsonOf(await call('/api/state', { cookie: admin }));
+  const task1 = state.initiatives.flatMap((p) => p.tasks).find((t) => t.id === 1);
+  const note = task1.notes.find((n) => n.id === add.id);
+  check("note exposes the author's name", note?.authorName === 'Mia', JSON.stringify(note));
+  check('note exposes a creation timestamp', typeof note?.createdAt === 'string' && note.createdAt.length > 0, JSON.stringify(note));
+
+  const edit = await call(`/api/tasks/1/notes/${add.id}`, { method: 'PATCH', cookie: admin, body: { text: 'edited by someone else' } });
+  check('a different person can edit the note', edit.status === 200, `got ${edit.status}`);
+  const stateAfter = await jsonOf(await call('/api/state', { cookie: admin }));
+  const noteAfter = stateAfter.initiatives.flatMap((p) => p.tasks).find((t) => t.id === 1).notes.find((n) => n.id === add.id);
+  check("editing a note does not change its displayed author, still the original creator",
+        noteAfter?.authorName === 'Mia', JSON.stringify(noteAfter));
+}
+
+section('Notifications: note add/edit emails other owners, never the actor');
+{
+  env = makeEnv(paths);
+  installFakeEmail();
+  const sam = await signIn('sam@visionbrokers.co.za');
+  const deoni = await signIn('deoni@visionric.co.za');
+  const mia = await signIn('mia@visionbrokers.co.za');
+
+  const proj = await jsonOf(await call('/api/projects', { method: 'POST', cookie: sam, body: { name: 'Note Notify Test' } }));
+
+  function makeOwnedTask(name, ownerIds) {
+    const r = env._rawDb.prepare(
+      `INSERT INTO tasks (project_id, name, status, sort_order) VALUES (?, ?, 'in-progress', 999)`
+    ).run(proj.id, name);
+    const taskId = Number(r.lastInsertRowid);
+    ownerIds.forEach((uid) => env._rawDb.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?, ?)`).run(taskId, uid));
+    return taskId;
+  }
+
+  const soleOwnerTask = makeOwnedTask('Sole owner task', ['sam']);
+  const multiOwnerTask = makeOwnedTask('Multi owner task', ['sam', 'deoni']);
+  const stanOnlyTask = makeOwnedTask('Stan only task', ['stan']);
+
+  outbox.length = 0;
+  const r1 = await jsonOf(await call(`/api/tasks/${soleOwnerTask}/notes`, { method: 'POST', cookie: sam, body: { text: 'note by sole owner' } }));
+  check('sole owner adding their own note sends no email, no one else to notify',
+        outbox.length === 0 && (r1.notified || []).length === 0, JSON.stringify({ outbox, r1 }));
+
+  outbox.length = 0;
+  const r2 = await jsonOf(await call(`/api/tasks/${multiOwnerTask}/notes`, { method: 'POST', cookie: deoni, body: { text: 'note by deoni' } }));
+  check('Deoni adding a note on a task she and Sam own notifies Sam, not Deoni',
+        outbox.length === 1 && outbox[0].to_email === 'sam@visionbrokers.co.za' && (r2.notified || []).includes('Sam'),
+        JSON.stringify({ outbox, r2 }));
+  check('note-add email names the actor and reads as an addition',
+        /Note added/.test(outbox[0].subject) && /Deoni/.test(outbox[0].heading), JSON.stringify(outbox[0]));
+
+  outbox.length = 0;
+  const editRes = await jsonOf(await call(`/api/tasks/${multiOwnerTask}/notes/${r2.id}`, { method: 'PATCH', cookie: sam, body: { text: 'edited by sam' } }));
+  check('Sam editing that same note notifies Deoni, not Sam',
+        outbox.length === 1 && outbox[0].to_email === 'deoni@visionric.co.za' && (editRes.notified || []).includes('Deoni'),
+        JSON.stringify({ outbox, editRes }));
+  check('note-edit email reads as an edit', /Note edited/.test(outbox[0].subject), outbox[0].subject);
+
+  outbox.length = 0;
+  const r3 = await jsonOf(await call(`/api/tasks/${stanOnlyTask}/notes`, { method: 'POST', cookie: mia, body: { text: 'note by a non-owner' } }));
+  check("a non-owner (Mia) adding a note still notifies the task's real owner (Stan)",
+        outbox.length === 1 && outbox[0].to_email === 'stanford@visionbrokers.co.za', JSON.stringify({ outbox, r3 }));
+}
+
+section('Due-date time: optional, informational, reminder logic stays date-only');
+{
+  env = makeEnv(paths);
+  installFakeEmail();
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  const proj = await jsonOf(await call('/api/projects', { method: 'POST', cookie: admin, body: { name: 'Due Time Test' } }));
+
+  const created = await jsonOf(await call(`/api/projects/${proj.id}/tasks`, {
+    method: 'POST', cookie: admin, body: { name: 'Task with time', due: '2026-09-01', dueTime: '17:30' },
+  }));
+  check('task created with a due date and time', created.ok, JSON.stringify(created));
+
+  const badFormat = await call(`/api/projects/${proj.id}/tasks`, {
+    method: 'POST', cookie: admin, body: { name: 'Bad time', due: '2026-09-01', dueTime: '5:30pm' },
+  });
+  check('invalid due time format rejected on create', badFormat.status === 400, `got ${badFormat.status}`);
+
+  const noDate = await call(`/api/projects/${proj.id}/tasks`, {
+    method: 'POST', cookie: admin, body: { name: 'Time without date', dueTime: '09:00' },
+  });
+  check('due time without a due date rejected on create', noDate.status === 400, `got ${noDate.status}`);
+
+  const state = await jsonOf(await call('/api/state', { cookie: admin }));
+  const task = state.initiatives.find((p) => p.id === proj.id).tasks.find((t) => t.id === created.id);
+  check('GET /api/state exposes dueTime', task.dueTime === '17:30', JSON.stringify(task));
+
+  const badPatch = await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie: admin, body: { dueTime: 'nope' } });
+  check('invalid due time format rejected on PATCH', badPatch.status === 400, `got ${badPatch.status}`);
+
+  const memberTask = await jsonOf(await call(`/api/projects/${proj.id}/tasks`, {
+    method: 'POST', cookie: member, body: { name: 'Member owned task', due: '2026-09-05' },
+  }));
+  const memberDueTimePatch = await call(`/api/tasks/${memberTask.id}`, { method: 'PATCH', cookie: member, body: { dueTime: '10:00' } });
+  check('member cannot set due time even on their own task, admin-only field like due date',
+        memberDueTimePatch.status === 400, `got ${memberDueTimePatch.status}`);
+
+  const setTimeWithoutDate = await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie: admin, body: { due: '', dueTime: '08:00' } });
+  check('setting a due time while clearing the due date in the same request is rejected',
+        setTimeWithoutDate.status === 400, `got ${setTimeWithoutDate.status}`);
+
+  const clearDue = await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie: admin, body: { due: '' } });
+  check('clearing the due date alone succeeds', clearDue.status === 200, `got ${clearDue.status}`);
+  const row = env._rawDb.prepare('SELECT due_date, due_time FROM tasks WHERE id=?').get(created.id);
+  check('clearing the due date also clears due time, a time cannot outlive its date',
+        row.due_date === null && row.due_time === null, JSON.stringify(row));
+
+  const setTimeAgainWithoutDate = await call(`/api/tasks/${created.id}`, { method: 'PATCH', cookie: admin, body: { dueTime: '08:00' } });
+  check('setting a due time on a task with no due date at all is rejected',
+        setTimeAgainWithoutDate.status === 400, `got ${setTimeAgainWithoutDate.status}`);
+}
+
+section('Archived project flag: hidden by default, admin-only, reminders skip it, status untouched');
+{
+  env = makeEnv(paths);
+  installFakeEmail();
+  const admin = await signIn('sam@visionbrokers.co.za');
+  const member = await signIn('mia@visionbrokers.co.za');
+
+  const proj = await jsonOf(await call('/api/projects', { method: 'POST', cookie: admin, body: { name: 'To Be Archived', status: 'at-risk' } }));
+  await call(`/api/projects/${proj.id}/owners`, { method: 'POST', cookie: admin, body: { userId: 'mia' } });
+
+  const memberArchiveAttempt = await call(`/api/projects/${proj.id}`, { method: 'PATCH', cookie: member, body: { archived: true } });
+  check('member gets 403 archiving a project', memberArchiveAttempt.status === 403, `got ${memberArchiveAttempt.status}`);
+
+  const archive = await call(`/api/projects/${proj.id}`, { method: 'PATCH', cookie: admin, body: { archived: true } });
+  check('admin can archive a project', archive.status === 200, `got ${archive.status}`);
+  const archivedRow = env._rawDb.prepare('SELECT status, archived FROM projects WHERE id=?').get(proj.id);
+  check('archiving does not touch the real status underneath',
+        archivedRow.status === 'at-risk' && archivedRow.archived === 1, JSON.stringify(archivedRow));
+
+  const adminState = await jsonOf(await call('/api/state', { cookie: admin }));
+  check('archived project is hidden from admin state by default', !adminState.initiatives.some((p) => p.id === proj.id));
+  check('archivedCount reflects the hidden archived project', adminState.archivedCount >= 1, adminState.archivedCount);
+
+  const adminStateWithArchived = await jsonOf(await call('/api/state?includeArchived=1', { cookie: admin }));
+  const revealed = adminStateWithArchived.initiatives.find((p) => p.id === proj.id);
+  check('includeArchived=1 reveals it again for an admin, still showing its real status',
+        revealed?.archived === true && revealed?.status === 'at-risk', JSON.stringify(revealed));
+
+  const memberState = await jsonOf(await call('/api/state', { cookie: member }));
+  check('archived project is also hidden by default from a member',
+        !memberState.initiatives.some((p) => p.id === proj.id));
+  const memberStateWithArchived = await jsonOf(await call('/api/state?includeArchived=1', { cookie: member }));
+  check('member can reveal it via includeArchived',
+        memberStateWithArchived.initiatives.some((p) => p.id === proj.id));
+
+  // Since all projects are visible to everyone (changed 6 Aug 2026), this is
+  // no longer gated by being a named owner: a totally unrelated member sees
+  // the same archived/includeArchived behaviour too.
+  const unrelated = await signIn('stanford@visionbrokers.co.za');
+  const unrelatedState = await jsonOf(await call('/api/state?includeArchived=1', { cookie: unrelated }));
+  check('an unrelated member (Stan, not an owner) can also reveal the archived project',
+        unrelatedState.initiatives.some((p) => p.id === proj.id));
+
+  const unarchive = await call(`/api/projects/${proj.id}`, { method: 'PATCH', cookie: admin, body: { archived: false } });
+  check('archiving is reversible', unarchive.status === 200, `got ${unarchive.status}`);
+  const restoredState = await jsonOf(await call('/api/state', { cookie: admin }));
+  const restored = restoredState.initiatives.find((p) => p.id === proj.id);
+  check('unarchived project shows up again without the toggle, status unaffected throughout',
+        !!restored && restored.archived === false && restored.status === 'at-risk', JSON.stringify(restored));
+
+  await call(`/api/projects/${proj.id}`, { method: 'PATCH', cookie: admin, body: { archived: true } });
+  const iso = (offsetDays) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+  const archivedTaskRes = env._rawDb.prepare(
+    `INSERT INTO tasks (project_id, name, status, due_date, sort_order) VALUES (?, ?, ?, ?, 999)`
+  ).run(proj.id, 'Archived project task', 'in-progress', iso(1));
+  env._rawDb.prepare(`INSERT INTO task_owners (task_id, user_id) VALUES (?, 'stan')`).run(Number(archivedTaskRes.lastInsertRowid));
+
+  outbox.length = 0;
+  await runDueDateReminders(env);
+  check('a task due soon in an archived project gets no automatic reminder',
+        !outbox.some((m) => /Archived project task/.test(m.subject)), JSON.stringify(outbox.map((m) => m.subject)));
 }
 
 section('Logout');

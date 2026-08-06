@@ -68,6 +68,8 @@
   .status-at-risk{background:rgba(245,169,64,0.15);color:var(--amber);}
   .status-blocked{background:rgba(240,85,90,0.15);color:var(--red);}
   .status-paused{background:rgba(107,114,128,0.18);color:var(--grey);}
+  .status-archived{background:rgba(140,148,160,0.14);color:var(--text-faint);}
+  .card.card-archived{opacity:0.72;}
   .caret{color:var(--text-faint);font-size:13px;transition:transform 0.15s;}
   .card.open .caret{transform:rotate(90deg);}
   .card-meta-row{display:flex;gap:16px;padding:0 18px 14px;font-size:12px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;flex-wrap:wrap;}
@@ -109,6 +111,8 @@
   .task-owner{color:var(--signal);font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
   select.task-status{background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:4px 7px;border-radius:5px;}
   select.task-status:disabled{opacity:0.62;cursor:not-allowed;}
+  .due-cell{display:flex;flex-direction:column;gap:4px;}
+  input.task-due-time{width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:4px 6px;border-radius:5px;}
   .task-notes{display:flex;flex-direction:column;gap:6px;}
   .task-note-box{display:flex;align-items:flex-start;gap:5px;background:rgba(32,37,47,0.7);border:1px solid var(--border);border-radius:6px;padding:5px 6px;}
   .task-note-box textarea{flex:1;min-width:0;background:transparent;border:none;color:var(--text);font-size:14px;font-family:'Inter',sans-serif;padding:2px 0;resize:none;overflow:hidden;line-height:1.45;}
@@ -230,6 +234,7 @@
         <select id="view-as-select"><option value="">Select person...</option></select>
         <button class="lock-btn" id="view-as-stop" style="display:none;">Stop previewing</button>
       </div>
+      <button class="lock-btn" id="show-archived-toggle" style="display:none;">Show archived (0)</button>
       <button class="lock-btn" id="new-project-toggle" style="display:none;">+ New Project</button>
     </div>
   </div>
@@ -295,6 +300,7 @@ let users = [];
 let auditLog = null;
 let leaderEditing = false;
 let focusEditing = false;
+let showArchived = false;
 
 function isAdmin(){ return (state?.viewingAs?.role ?? state?.me?.role) === 'admin'; }
 function isRealAdmin(){ return state?.me?.role === 'admin'; }
@@ -341,7 +347,10 @@ async function loadState(viewAs){
   const invalidLink = params.get('error') === 'invalid_link';
   if(invalidLink) history.replaceState(null, '', location.pathname);
   try{
-    const path = viewAs ? `/api/state?viewAs=${encodeURIComponent(viewAs)}` : '/api/state';
+    const qs = new URLSearchParams();
+    if(viewAs) qs.set('viewAs', viewAs);
+    if(showArchived) qs.set('includeArchived', '1');
+    const path = qs.toString() ? `/api/state?${qs}` : '/api/state';
     state = normalizeState(await api(path));
     users = await api('/api/users');
     render();
@@ -356,10 +365,12 @@ function normalizeState(s){
   s.ferdiDecisions = s.ferdiDecisions || [];
   (s.initiatives || []).forEach(init=>{
     init.owners = (init.owners || []).map(o=>typeof o === 'string' ? {id:o.toLowerCase(), name:o} : o);
+    if(init.archived === undefined) init.archived = false;
     if(init.keyRisk === undefined && init.outstanding !== undefined) init.keyRisk = init.outstanding;
     init.keyRisk = init.keyRisk || [];
     (init.tasks || []).forEach(t=>{
       if(t.due === undefined) t.due = null;
+      if(t.dueTime === undefined) t.dueTime = null;
       if(!Array.isArray(t.notes)) t.notes = [];
       if(!Array.isArray(t.owners)){
         t.owners = t.owner ? ownerStringToUsers(t.owner) : [];
@@ -431,7 +442,7 @@ function reopen(idx){
 function statusWeight(s){ if(s==='blocked') return 2; if(s==='at-risk') return 1; return 0; }
 function statusLabel(s){
   return ({
-    'on-track':'On Track','at-risk':'At Risk','blocked':'Blocked','paused':'Paused',
+    'on-track':'On Track','at-risk':'At Risk','blocked':'Blocked','paused':'Paused','archived':'Archived',
     'not-started':'Not started','in-progress':'In progress','done':'Done'
   })[s] || s;
 }
@@ -493,12 +504,21 @@ function taskOwnerAddOptions(t){
   return people + labels;
 }
 
+function noteHoverText(note){
+  if(!note.authorName) return '';
+  const when = note.createdAt ? formatAuditTime(note.createdAt) : '';
+  return `Added by ${note.authorName}${when ? ' · ' + when : ''}`;
+}
+
 function taskNotes(t, idx, ti){
   const disabled = isPreviewing() ? 'disabled' : '';
-  const notes = (t.notes || []).map(note=>`<div class="task-note-box" data-note-box="${idx}-${ti}-${escapeHtml(note.id)}">
-    <textarea rows="1" data-task-note-edit="${idx}" data-init="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" aria-label="Task note" ${disabled}>${escapeHtml(note.text || '')}</textarea>
+  const notes = (t.notes || []).map(note=>{
+    const hover = escapeHtml(noteHoverText(note));
+    return `<div class="task-note-box" data-note-box="${idx}-${ti}-${escapeHtml(note.id)}" title="${hover}">
+    <textarea rows="1" data-task-note-edit="${idx}" data-init="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" aria-label="Task note" title="${hover}" ${disabled}>${escapeHtml(note.text || '')}</textarea>
     <button data-delete-task-note="${idx}" data-task="${ti}" data-note-id="${escapeHtml(note.id)}" title="delete note" ${disabled}>&times;</button>
-  </div>`).join('');
+  </div>`;
+  }).join('');
   return `<div class="task-notes">
     ${notes}
     <div class="add-note-row" data-add-note-row="${idx}-${ti}">
@@ -639,6 +659,10 @@ function renderProjectControls(){
     row.classList.remove('open');
     document.getElementById('new-project-form')?.reset();
   }
+  const archivedBtn = document.getElementById('show-archived-toggle');
+  const archivedCount = state?.archivedCount || 0;
+  archivedBtn.style.display = (archivedCount > 0 || showArchived) ? '' : 'none';
+  archivedBtn.textContent = showArchived ? `Hide archived (${archivedCount})` : `Show archived (${archivedCount})`;
 }
 
 function renderCards(){
@@ -646,7 +670,7 @@ function renderCards(){
   container.innerHTML = '';
   state.initiatives.forEach((init, idx)=>{
     const card = document.createElement('div');
-    card.className = 'card' + (isPreviewing() ? ' readonly-preview' : '');
+    card.className = 'card' + (isPreviewing() ? ' readonly-preview' : '') + (init.archived ? ' card-archived' : '');
     const admin = isAdmin();
     const disabled = isPreviewing() ? 'disabled' : '';
     card.innerHTML = `
@@ -658,7 +682,9 @@ function renderCards(){
           <input class="wwa-edit" data-project-title-input="${idx}" value="${escapeHtml(init.name)}" style="display:none;width:280px;margin:0;padding:6px 9px;">
           ${admin?`<button class="lock-btn" data-project-rename="${idx}" ${disabled}>Edit</button>`:''}
           <span class="status-pill status-${init.status}">${statusLabel(init.status)}</span>
+          ${init.archived?`<span class="status-pill status-archived">Archived</span>`:''}
           ${admin?`<button class="lock-btn" data-project-details-toggle="${idx}" ${disabled}>✎ Edit details</button>`:''}
+          ${admin?`<button class="lock-btn" data-project-archive-toggle="${idx}" ${disabled}>${init.archived?'Unarchive':'Archive'}</button>`:''}
         </div>
       </div>
       <div class="card-meta-row">
@@ -729,7 +755,7 @@ function renderCards(){
                 <td class="task-name">${t.number ? `<span class="task-num"${admin && !isPreviewing() ? ' draggable="true"' : ''}>${escapeHtml(t.number)}</span> ` : ''}${escapeHtml(t.name)}</td>
                 <td><div class="owners-row">${taskOwnerChips(t, idx, ti)}${admin?`<span class="owner-add"><select class="owner-select" data-add-task-owner-input="${idx}" data-task="${ti}"><option value="">+ owner</option>${taskOwnerAddOptions(t)}</select><button data-add-task-owner-btn="${idx}" data-task="${ti}">Add</button></span>`:''}</div></td>
                 <td><select class="task-status" data-init="${idx}" data-task="${ti}" ${statusDisabled}>${taskStatusOptions(t.status)}</select>${admin && (t.owners || []).length ? `<button class="nudge-btn" data-nudge="${idx}" data-task="${ti}">Nudge</button>`:''}${admin ? `<button class="nudge-btn" data-delete-task="${idx}" data-task="${ti}">Delete</button>`:''}<div class="save-note" data-nudge-note="${idx}-${ti}"></div></td>
-                <td><input type="date" class="task-due" data-init="${idx}" data-task="${ti}" value="${t.due || ''}">${t.due ? daysLeftBadge(t.due) : ''}</td>
+                <td><div class="due-cell"><input type="date" class="task-due" data-init="${idx}" data-task="${ti}" value="${t.due || ''}"><input type="time" class="task-due-time" data-init="${idx}" data-task="${ti}" value="${t.dueTime || ''}" ${t.due ? '' : 'disabled'}></div>${t.due ? daysLeftBadge(t.due) : ''}</td>
                 <td>${taskNotes(t, idx, ti)}</td>
               </tr>
             `}).join('');
@@ -744,6 +770,9 @@ function renderCards(){
             </label>
             <label>Due date
               <input type="date" data-add-task-due="${idx}">
+            </label>
+            <label>Due time
+              <input type="time" data-add-task-due-time="${idx}">
             </label>
             <label class="task-note-field">Note
               <input type="text" placeholder="Optional note..." data-add-task-note="${idx}">
@@ -809,6 +838,20 @@ function bindCardEvents(container){
       }
     });
   });
+  container.querySelectorAll('[data-project-archive-toggle]').forEach(btn=>btn.addEventListener('click', async e=>{
+    e.stopPropagation();
+    const idx = +btn.dataset.projectArchiveToggle;
+    const init = state.initiatives[idx];
+    if(isPreviewing()){
+      flashNote(document.querySelectorAll('.card')[idx]?.querySelector('.save-note'), 'Read-only preview, stop previewing to make changes.', true);
+      return;
+    }
+    const old = init.archived;
+    const next = !init.archived;
+    init.archived = next;
+    await write(btn, ()=>api(`/api/projects/${init.id}`, {method:'PATCH', body:{archived:next}}), ()=>{init.archived = old;});
+    await loadState(state?.viewingAs?.id);
+  }));
   container.querySelectorAll('[data-project-details-toggle]').forEach(btn=>btn.addEventListener('click', e=>{
     e.stopPropagation();
     const idx = +btn.dataset.projectDetailsToggle;
@@ -905,7 +948,7 @@ function bindCardEvents(container){
     const input = container.querySelector(`[data-add-note-input="${i}"][data-task="${ti}"]`);
     const text = input.value.trim();
     if(!text) return;
-    const tempNote = {id:`temp-${Date.now()}`, text};
+    const tempNote = {id:`temp-${Date.now()}`, text, authorName: currentUser().name || 'You', createdAt: new Date().toISOString()};
     task.notes.unshift(tempNote);
     input.value = '';
     await write(btn, ()=>api(`/api/tasks/${task.id}/notes`, {method:'POST', body:{text}}), ()=>{task.notes = task.notes.filter(n=>n !== tempNote);}, result=>{ if(result.id) tempNote.id = result.id; });
@@ -922,9 +965,21 @@ function bindCardEvents(container){
   container.querySelectorAll('.task-due').forEach(inp=>inp.addEventListener('change', async e=>{
     const i = +e.target.dataset.init, ti = +e.target.dataset.task;
     const task = state.initiatives[i].tasks[ti];
-    const old = task.due;
+    const old = task.due, oldTime = task.dueTime;
     task.due = e.target.value || null;
-    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{due:task.due}}), ()=>{task.due = old;}, null);
+    // Clearing the due date also clears any due time (mirrors the backend:
+    // a time cannot outlive its date), so the UI doesn't strand a disabled
+    // time input still holding a stale value.
+    if(!task.due) task.dueTime = null;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{due:task.due}}), ()=>{task.due = old; task.dueTime = oldTime;}, null);
+    render(); reopen(i);
+  }));
+  container.querySelectorAll('.task-due-time').forEach(inp=>inp.addEventListener('change', async e=>{
+    const i = +e.target.dataset.init, ti = +e.target.dataset.task;
+    const task = state.initiatives[i].tasks[ti];
+    const old = task.dueTime;
+    task.dueTime = e.target.value || null;
+    await write(e.target, ()=>api(`/api/tasks/${task.id}`, {method:'PATCH', body:{dueTime:task.dueTime}}), ()=>{task.dueTime = old;}, null);
     render(); reopen(i);
   }));
   container.querySelectorAll('[data-add-task-owner-btn]').forEach(btn=>btn.addEventListener('click', async ()=>{
@@ -1091,10 +1146,12 @@ function bindCardEvents(container){
     const init = state.initiatives[idx];
     const nameInput = container.querySelector(`[data-add-task-name="${idx}"]`);
     const dueInput = container.querySelector(`[data-add-task-due="${idx}"]`);
+    const dueTimeInput = container.querySelector(`[data-add-task-due-time="${idx}"]`);
     const noteInput = container.querySelector(`[data-add-task-note="${idx}"]`);
     const name = nameInput.value.trim();
     if(!name) return;
     const due = dueInput.value || null;
+    const dueTime = due ? (dueTimeInput.value || null) : null;
     const note = noteInput.value.trim();
     const ownerIds = isAdmin()
       ? Array.from(container.querySelectorAll(`[data-new-task-owners="${idx}"] .owners-chip`)).map(chip=>chip.dataset.userId)
@@ -1102,9 +1159,9 @@ function bindCardEvents(container){
     const optimisticOwners = isAdmin()
       ? ownerIds.map(id=>users.find(u=>u.id === id)).filter(Boolean).map(u=>({id:u.id, name:u.name}))
       : [currentUser()];
-    const body = {name, due, note};
+    const body = {name, due, dueTime, note};
     if(isAdmin()) body.ownerIds = ownerIds;
-    const tempTask = {id:`temp-${Date.now()}`, name, owners:optimisticOwners, ownerLabel:null, status:'not-started', due, notes:note ? [{id:`temp-note-${Date.now()}`, text:note}] : []};
+    const tempTask = {id:`temp-${Date.now()}`, name, owners:optimisticOwners, ownerLabel:null, status:'not-started', due, dueTime, notes:note ? [{id:`temp-note-${Date.now()}`, text:note, authorName: currentUser().name || 'You', createdAt: new Date().toISOString()}] : []};
     init.tasks.push(tempTask);
     form.reset();
     container.querySelector(`[data-new-task-owners="${idx}"]`)?.replaceChildren();
@@ -1328,6 +1385,11 @@ document.getElementById('view-as-select').addEventListener('change', async e=>{
 
 document.getElementById('view-as-stop').addEventListener('click', async ()=>stopPreview());
 document.getElementById('preview-stop-banner').addEventListener('click', async ()=>stopPreview());
+
+document.getElementById('show-archived-toggle').addEventListener('click', async ()=>{
+  showArchived = !showArchived;
+  await loadState(state?.viewingAs?.id);
+});
 
 document.getElementById('new-project-toggle').addEventListener('click', ()=>{
   const row = document.getElementById('new-project-row');

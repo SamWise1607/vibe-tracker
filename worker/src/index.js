@@ -1,5 +1,5 @@
 /**
- * VIBE Operations Tracker: Worker API.
+ * VIBE Tracker: Worker API.
  *
  * Frontend contract: GET /api/state returns almost exactly the shape the
  * original draft kept in its `state` variable, so the UI port is mostly

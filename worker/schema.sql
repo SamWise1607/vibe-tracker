@@ -1,4 +1,4 @@
--- VIBE Operations Tracker: D1 schema
+-- VIBE Tracker: D1 schema
 -- Run with: npx wrangler d1 execute vibe-tracker --file=./schema.sql --remote
 
 DROP TABLE IF EXISTS audit_log;

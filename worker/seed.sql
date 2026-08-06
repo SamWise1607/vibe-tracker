@@ -1,4 +1,4 @@
--- VIBE Operations Tracker: seed data
+-- VIBE Tracker: seed data
 -- Generated from vibe_dashboardDRAFT.html. Do not hand-edit; regenerate instead.
 -- Run with: npx wrangler d1 execute vibe-tracker --file=./seed.sql --remote
 

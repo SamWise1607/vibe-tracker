@@ -61,7 +61,7 @@ function parseOwner(raw){
 
 const out = [];
 const warn = [];
-out.push('-- VIBE Operations Tracker: seed data');
+out.push('-- VIBE Tracker: seed data');
 out.push('-- Generated from vibe_dashboardDRAFT.html. Do not hand-edit; regenerate instead.');
 out.push('-- Run with: npx wrangler d1 execute vibe-tracker --file=./seed.sql --remote');
 out.push('');
